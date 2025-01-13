@@ -23,7 +23,6 @@ from torch_geometric.loader import DataLoader
 
 from autoencoder import VariationalAutoEncoder
 from denoise_model import DenoiseNN, p_losses, sample
-from gan_model import GraphDiscriminator, GraphGenerator
 from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset
 
 
@@ -91,25 +90,10 @@ parser.add_argument('--hidden-dim-denoise', type=int, default=512, help="Hidden 
 parser.add_argument('--n-layers_denoise', type=int, default=3, help="Number of layers in the denoising model (default: 3)")
 
 # Flag to toggle training of the autoencoder (VGAE)
-parser.add_argument('--train-autoencoder', action='store_false', default=False, help="Flag to enable/disable autoencoder (VGAE) training (default: enabled)")
+parser.add_argument('--train-autoencoder', action='store_false', default=True, help="Flag to enable/disable autoencoder (VGAE) training (default: enabled)")
 
 # Flag to toggle training of the diffusion-based denoising model
-parser.add_argument('--train-denoiser', action='store_true', default=False, help="Flag to enable/disable denoiser training (default: enabled)")
-
-# Flag to toggle training of the GAN
-parser.add_argument('--train-gan', action='store_true', default=False, help="Flag to enable GAN training")
-
-# Number of epochs for GAN
-parser.add_argument('--epochs-gan', type=int, default=300, help="Number of training epochs for the GAN (default: 300)")
-
-# Hidden dimension size for the GAN
-parser.add_argument('--hidden-dim-gan', type=int, default=128, help="Hidden dimension size for gan layers (default: 128)")
-
-# Lr for the GAN optimizer
-parser.add_argument('--gan-lr', type=float, default=2e-4, help="Learning rate for the GAN optimizer (default: 0.0002)")
-
-# GAN batch size
-parser.add_argument('--gan-batch-size', type=int, default=128, help="Batch size for GAN training (default: 128)")
+parser.add_argument('--train-denoiser', action='store_true', default=True, help="Flag to enable/disable denoiser training (default: enabled)")
 
 # Dimensionality of conditioning vectors for conditional generation
 parser.add_argument('--dim-condition', type=int, default=128, help="Dimensionality of conditioning vectors for conditional generation (default: 128)")
@@ -216,83 +200,6 @@ sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
 # calculations for posterior q(x_{t-1} | x_t, x_0)
 posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 
-# initialize GAN model
-generator = GraphGenerator(latent_dim=args.latent_dim, hidden_dim=128, n_nodes=args.n_max_nodes).to(device)
-discriminator = GraphDiscriminator(n_nodes=args.n_max_nodes, hidden_dim=128).to(device)
-optimizer_G = torch.optim.Adam(generator.parameters(), lr=args.lr)
-optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=args.lr)
-
-# train GAN model
-if args.train_gan:
-    # Import GAN classes
-    from gan_model import GraphGenerator, GraphDiscriminator
-
-    # Initialize GAN models
-    generator = GraphGenerator(latent_dim=args.latent_dim, hidden_dim=args.hidden_dim_gan, n_nodes=args.n_max_nodes).to(device)
-    discriminator = GraphDiscriminator(n_nodes=args.n_max_nodes, hidden_dim=args.hidden_dim_gan).to(device)
-
-    # Optimizers
-    optimizer_G = torch.optim.Adam(generator.parameters(), lr=args.gan_lr)
-    optimizer_D = torch.optim.Adam(discriminator.parameters(), lr=args.gan_lr)
-
-    # Loss function (Binary Cross-Entropy)
-    adversarial_loss = torch.nn.BCELoss()
-
-    print("Training GAN...")
-
-    # GAN training loop
-    for epoch in range(args.epochs_gan):
-        generator.train()
-        discriminator.train()
-
-        for i, data in enumerate(train_loader):
-            # Prepare real data
-            real_graphs = data.A.to(device)
-            batch_size = real_graphs.size(0)
-
-            # Labels for the discriminator
-            real_labels = torch.ones(batch_size, 1, device=device)
-            fake_labels = torch.zeros(batch_size, 1, device=device)
-
-            # Phase 1: Train the Discriminator
-            optimizer_D.zero_grad()
-
-            # Real data output
-            real_validity = discriminator(real_graphs)
-            d_real_loss = adversarial_loss(real_validity, real_labels)
-
-            # Generated data output
-            z = torch.randn(batch_size, args.latent_dim, device=device)  # Random noise
-            fake_graphs = generator(z)
-            fake_validity = discriminator(fake_graphs.detach())
-            d_fake_loss = adversarial_loss(fake_validity, fake_labels)
-
-            # Total Discriminator loss
-            d_loss = (d_real_loss + d_fake_loss) / 2
-            d_loss.backward()
-            optimizer_D.step()
-
-            # Phase 2: Train the Generator
-            optimizer_G.zero_grad()
-
-            # Generate fake graphs and evaluate their validity
-            fake_validity = discriminator(fake_graphs)
-            g_loss = adversarial_loss(fake_validity, real_labels)
-
-            g_loss.backward()
-            optimizer_G.step()
-
-        # Display losses
-        print(f"Epoch [{epoch+1}/{args.epochs_gan}] | D Loss: {d_loss.item():.4f} | G Loss: {g_loss.item():.4f}")
-
-    # Save the GAN models after training
-    torch.save(generator.state_dict(), "generator_final.pth")
-    torch.save(discriminator.state_dict(), "discriminator_final.pth")
-    print("GAN models saved successfully.")
-
-
-
-
 # initialize denoising model
 denoise_model = DenoiseNN(input_dim=args.latent_dim, hidden_dim=args.hidden_dim_denoise, n_layers=args.n_layers_denoise, n_cond=args.n_condition, d_cond=args.dim_condition).to(device)
 optimizer = torch.optim.Adam(denoise_model.parameters(), lr=args.lr)
@@ -348,99 +255,34 @@ denoise_model.eval()
 del train_loader, val_loader
 
 # Save to a CSV file
-#with open("output.csv", "w", newline="") as csvfile:
-#    writer = csv.writer(csvfile)
-#    # Write the header
-#    writer.writerow(["graph_id", "edge_list"])
-#    for k, data in enumerate(tqdm(test_loader, desc='Processing test set',)):
-#        data = data.to(device)
-#        
-#        stat = data.stats
-#        bs = stat.size(0)
-#
-#        graph_ids = data.filename
-#
-#        samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas, batch_size=bs)
-#        x_sample = samples[-1]
-#        adj = autoencoder.decode_mu(x_sample)
-#        stat_d = torch.reshape(stat, (-1, args.n_condition))
-#
-#
-#        for i in range(stat.size(0)):
-#            stat_x = stat_d[i]
-#
-#            Gs_generated = construct_nx_from_adj(adj[i,:,:].detach().cpu().numpy())
-#            stat_x = stat_x.detach().cpu().numpy()
-#
-#            # Define a graph ID
-#            graph_id = graph_ids[i]
-#
-#            # Convert the edge list to a single string
-#            edge_list_text = ", ".join([f"({u}, {v})" for u, v in Gs_generated.edges()])           
-#            # Write the graph ID and the full edge list as a single row
-#            writer.writerow([graph_id, edge_list_text])
-
-# Save to a CSV file
-#with open("output.csv", "w", newline="") as csvfile:
-#    writer = csv.writer(csvfile)
-#    # Write the header
-#    writer.writerow(["graph_id", "edge_list"])
-#    for k, data in enumerate(tqdm(test_loader, desc='Processing test set',)):
-#        data = data.to(device)
-#        
-#        graph_ids = data.filename
-#        batch_size = data.stats.size(0)
-#
-#        # Option 1: Use the GAN to generate latent representations
-#        z = torch.randn(batch_size, args.latent_dim, device=device)  # Random noise
-#        latent_representation = generator(z)
-#
-#        # Decode the latent representation into adjacency matrices (if using VGAE)
-#        #adj = autoencoder.decode_mu(latent_representation)
-#
-#        # OR Option 2: Generate adjacency matrices directly with the GAN
-#        adj = generator(z).view(-1, args.n_max_nodes, args.n_max_nodes)
-#
-#        for i in range(batch_size):
-#            # Convert adjacency matrix to a NetworkX graph
-#            Gs_generated = construct_nx_from_adj(adj[i,:,:].detach().cpu().numpy())
-#
-#            # Define a graph ID
-#            graph_id = graph_ids[i]
-#
-#            # Convert the edge list to a single string
-#            edge_list_text = ", ".join([f"({u}, {v})" for u, v in Gs_generated.edges()])
-#            
-#            # Write the graph ID and the full edge list as a single row
-#            writer.writerow([graph_id, edge_list_text])
-
-generator.load_state_dict(torch.load("generator_final.pth"))
-generator.eval()  # Set the generator to evaluation mode
-
-# Save to a CSV file
 with open("output.csv", "w", newline="") as csvfile:
     writer = csv.writer(csvfile)
     # Write the header
     writer.writerow(["graph_id", "edge_list"])
     for k, data in enumerate(tqdm(test_loader, desc='Processing test set',)):
         data = data.to(device)
+        
+        stat = data.stats
+        bs = stat.size(0)
 
         graph_ids = data.filename
-        batch_size = data.stats.size(0)
 
-        # Generate adjacency matrices directly with the GAN
-        z = torch.randn(batch_size, args.latent_dim, device=device)  # Random noise
-        adj = generator(z).view(-1, args.n_max_nodes, args.n_max_nodes)
+        samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas, batch_size=bs)
+        x_sample = samples[-1]
+        adj = autoencoder.decode_mu(x_sample)
+        stat_d = torch.reshape(stat, (-1, args.n_condition))
 
-        for i in range(batch_size):
-            # Convert adjacency matrix to a NetworkX graph
+
+        for i in range(stat.size(0)):
+            stat_x = stat_d[i]
+
             Gs_generated = construct_nx_from_adj(adj[i,:,:].detach().cpu().numpy())
+            stat_x = stat_x.detach().cpu().numpy()
 
             # Define a graph ID
             graph_id = graph_ids[i]
 
             # Convert the edge list to a single string
-            edge_list_text = ", ".join([f"({u}, {v})" for u, v in Gs_generated.edges()])
-            
+            edge_list_text = ", ".join([f"({u}, {v})" for u, v in Gs_generated.edges()])           
             # Write the graph ID and the full edge list as a single row
             writer.writerow([graph_id, edge_list_text])
