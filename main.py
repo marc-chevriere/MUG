@@ -104,7 +104,7 @@ parser.add_argument('--dim-condition', type=int, default=128, help="Dimensionali
 parser.add_argument('--n-condition', type=int, default=7, help="Number of distinct condition properties used in conditional vector (default: 7)")
 
 # Lambda value for contrastive loss
-parser.add_argument('--lambda-contrastive', type=float, default=0.3, help="Lambda value for contrastive loss (default: 0.2)")
+parser.add_argument('--lambda-contrastive', type=float, default=0, help="Lambda value for contrastive loss (default: 0.2)")
 
 # Data path for loading the dataset
 parser.add_argument('--data-path', type=str, default='./data', help="Path to the dataset for training and evaluation (default: './data')")
@@ -220,7 +220,7 @@ if args.train_autoencoder:
             }, 'autoencoder.pth.tar')
     wandb.finish()
 else:
-    checkpoint = torch.load('autoencoder.pth.tar')
+    checkpoint = torch.load('autoencoder.pth.tar', map_location=torch.device('cpu'))
     autoencoder.load_state_dict(checkpoint['state_dict'])
 
 autoencoder.eval()
@@ -312,7 +312,7 @@ if args.train_denoiser:
             }, 'denoise_model.pth.tar')
     wandb.finish()
 else:
-    checkpoint = torch.load('denoise_model.pth.tar')
+    checkpoint = torch.load('denoise_model.pth.tar', map_location=torch.device('cpu'))
     denoise_model.load_state_dict(checkpoint['state_dict'])
 
 denoise_model.eval()
