@@ -50,54 +50,7 @@ class condEncoder(nn.Module):
 
     def forward(self, x):
         return self.mlp(x)
-
-
-class GINwAtt(torch.nn.Module):
-    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2):
-        super().__init__()
-        self.dropout = dropout
-        
-        self.convs = torch.nn.ModuleList()
-        self.convs.append(GINConv(nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),  
-            nn.LeakyReLU(0.2),
-            nn.BatchNorm1d(hidden_dim),
-            nn.Linear(hidden_dim, hidden_dim), 
-            nn.LeakyReLU(0.2)
-        )))                        
-        for layer in range(n_layers-1):
-            self.convs.append(GINConv(nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim),  
-                nn.LeakyReLU(0.2),
-                nn.BatchNorm1d(hidden_dim),
-                nn.Linear(hidden_dim, hidden_dim), 
-                nn.LeakyReLU(0.2)
-            ))) 
-
-        self.att_pool = GlobalAttention(
-            gate_nn=nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.BatchNorm1d(hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, 1)
-            )
-        )
-
-        self.bn = nn.BatchNorm1d(hidden_dim)
-        self.fc = nn.Linear(hidden_dim, latent_dim)
-
-    def forward(self, data):
-        x, edge_index, batch = data.x, data.edge_index, data.batch
-
-        for conv in self.convs:
-            x = conv(x, edge_index)
-            x = F.dropout(x, self.dropout, training=self.training)
-
-        out = self.att_pool(x, batch)
-        out = self.bn(out)
-        out = self.fc(out)
-        return out
-
+    
 
 class GIN(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2):
@@ -184,13 +137,59 @@ class HybridGINGAT(torch.nn.Module):
         return out
 
 
+class GINwAtt(torch.nn.Module):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2):
+        super().__init__()
+        self.dropout = dropout
+        
+        self.convs = torch.nn.ModuleList()
+        self.convs.append(GINConv(nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),  
+            nn.LeakyReLU(0.2),
+            nn.BatchNorm1d(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim), 
+            nn.LeakyReLU(0.2)
+        )))                        
+        for layer in range(n_layers-1):
+            self.convs.append(GINConv(nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),  
+                nn.LeakyReLU(0.2),
+                nn.BatchNorm1d(hidden_dim),
+                nn.Linear(hidden_dim, hidden_dim), 
+                nn.LeakyReLU(0.2)
+            ))) 
+
+        self.att_pool = GlobalAttention(
+            gate_nn=nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.BatchNorm1d(hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, 1)
+            )
+        )
+
+        self.bn = nn.BatchNorm1d(hidden_dim)
+        self.fc = nn.Linear(hidden_dim, latent_dim)
+
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+
+        for conv in self.convs:
+            x = conv(x, edge_index)
+            x = F.dropout(x, self.dropout, training=self.training)
+
+        out = self.att_pool(x, batch)
+        out = self.bn(out)
+        out = self.fc(out)
+        return out
+
 # Variational Autoencoder
 class VariationalAutoEncoder(nn.Module):
     def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, lambda_contrastive):
         super(VariationalAutoEncoder, self).__init__()
         self.n_max_nodes = n_max_nodes
         self.input_dim = input_dim
-        self.encoder = GINwAtt(input_dim, hidden_dim_enc, latent_dim, n_layers_enc)
+        self.encoder = GINwAtt(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
         self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
         self.decoder = Decoder(latent_dim*2, hidden_dim_dec, n_layers_dec, n_max_nodes)
