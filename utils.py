@@ -23,12 +23,15 @@ import matplotlib.pyplot as plt
 
 
 
-def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim):
-
+def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, data_path):
+    dataset_path = os.path.join(data_path, dataset)
     data_lst = []
+
     if dataset == 'test':
-        filename = './data/dataset_'+dataset+'.pt'
-        desc_file = './data/'+dataset+'/test.txt'
+        # filename = './data/dataset_'+dataset+'.pt'
+        # desc_file = './data/'+dataset+'/test.txt'
+        filename = os.path.join(data_path, f'dataset_{dataset}.pt')
+        desc_file = os.path.join(dataset_path, 'test.txt')
 
         if os.path.isfile(filename):
             data_lst = torch.load(filename)
@@ -51,9 +54,12 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim):
 
 
     else:
-        filename = './data/dataset_'+dataset+'.pt'
-        graph_path = './data/'+dataset+'/graph'
-        desc_path = './data/'+dataset+'/description'
+        # filename = './data/dataset_'+dataset+'.pt'
+        # graph_path = './data/'+dataset+'/graph'
+        # desc_path = './data/'+dataset+'/description'
+        filename = os.path.join(data_path, f'dataset_{dataset}.pt')
+        graph_path = os.path.join(dataset_path, 'graph')
+        desc_path = os.path.join(dataset_path, 'description')
 
         if os.path.isfile(filename):
             data_lst = torch.load(filename)
