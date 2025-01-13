@@ -87,7 +87,7 @@ parser.add_argument('--timesteps', type=int, default=500, help="Number of timest
 parser.add_argument('--hidden-dim-denoise', type=int, default=512, help="Hidden dimension size for denoising model layers (default: 512)")
 
 # Number of layers in the denoising model
-parser.add_argument('--n-layers_denoise', type=int, default=3, help="Number of layers in the denoising model (default: 3)")
+parser.add_argument('--n-layers_denoise', type=int, default=2, help="Number of layers in the denoising model (default: 3)")
 
 # Flag to toggle training of the autoencoder (VGAE)
 parser.add_argument('--train-autoencoder', action='store_true', default=True, help="Enable training of the autoencoder (default: False)")
