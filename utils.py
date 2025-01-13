@@ -18,6 +18,8 @@ import scipy.sparse as sparse
 from torch_geometric.data import Data
 
 from extract_feats import extract_feats, extract_numbers
+from denoise_model import sample
+import matplotlib.pyplot as plt
 
 
 
@@ -107,7 +109,7 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim):
                 diags = np.squeeze(np.asarray(diags))
                 D = sparse.diags(diags).toarray()
                 L = D - adj_bfs
-                with sp.errstate(divide="ignore"):
+                with np.errstate(divide="ignore"):
                     diags_sqrt = 1.0 / np.sqrt(diags)
                 diags_sqrt[np.isinf(diags_sqrt)] = 0
                 DH = sparse.diags(diags).toarray()
@@ -223,6 +225,163 @@ def sigmoid_beta_schedule(timesteps):
     return torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
 
 
+
+def handle_nan(x):
+    if math.isnan(x):
+        return float(-100)
+    return x
+
+
+def calculate_stats_graph(G):
+    stats = []
+    # Number of nodes
+    num_nodes = handle_nan(float(G.number_of_nodes()))
+    stats.append(num_nodes)
+    # Number of edges
+    num_edges = handle_nan(float(G.number_of_edges()))
+    stats.append(num_edges)
+    # Average Degree
+    degrees = [deg for node, deg in G.degree()]
+    avg_degree = handle_nan(float(sum(degrees) / len(degrees)))
+    stats.append(avg_degree)
+    # Number of triangles
+    triangles = nx.triangles(G)
+    num_triangles = handle_nan(float(sum(triangles.values()) // 3))
+    stats.append(num_triangles)
+    # Global clustering coefficient
+    global_clustering_coefficient = handle_nan(float(nx.transitivity(G)))
+    stats.append(global_clustering_coefficient)
+    # Maximum k-core
+    max_k_core = handle_nan(float(max(nx.core_number(G).values())))
+    stats.append(max_k_core)
+    # Calculate communities
+    partition = community_louvain.best_partition(G)
+    n_communities = handle_nan(float(len(set(partition.values()))))
+    stats.append(n_communities)
+    return stats
+
+
+def gen_stats(G):
+    y_pred = calculate_stats_graph(G)
+    y_pred = np.nan_to_num(y_pred, nan=-100.0)
+    return y_pred
+
+
+def precompute_missing(y, y_pred):
+    y = np.array(y)
+    y_pred = np.array(y_pred)
+    y = np.nan_to_num(y, nan=-100.0)
+    y_pred = np.nan_to_num(y_pred, nan=-100.0)
+    # Find indices where y is -100
+    indices_to_change = np.where(y == -100.0)
+
+    # Set corresponding elements in y and y_pred to 0
+    y[indices_to_change] = 0.0
+    y_pred[indices_to_change] = 0.0
+    zeros_per_column = np.count_nonzero(y, axis=0)
+
+    list_from_array = zeros_per_column.tolist()
+    dc = {}
+    for i in range(len(list_from_array)):
+        dc[i] = list_from_array[i]
+    return dc, y, y_pred
+
+
+
+def sum_elements_per_column(matrix, dc):
+    num_rows = len(matrix)
+    num_cols = len(matrix[0])
+
+    column_sums = [0] * num_cols
+
+    for col in range(num_cols):
+        for row in range(num_rows):
+            column_sums[col] += matrix[row][col]
+
+    res = []
+    for col in range(num_cols):
+        x = column_sums[col]/dc[col]
+        res.append(x)
+
+    return res
+
+
+
+def calculate_mean_std(x):
+
+    sm = [0 for i in range(7)]
+    samples = [0 for i in range(7)]
+
+    for el in x:
+        for i, it in enumerate(el):
+            if not math.isnan(it):
+                sm[i] += it
+                samples[i] += 1
+
+    mean = [k / y for k,y in zip(sm, samples)]
+
+
+    sm2 = [0 for i in range(8)]
+
+    std = []
+
+    for el in x:
+        for i, it in enumerate(el):
+            if not math.isnan(it):
+                k = (it - mean[i])**2
+                sm2[i] += k
+
+    std = [(k / y)**0.5 for k,y in zip(sm2, samples)]
+    return mean, std
+
+
+
+def evaluation_metrics(y, y_pred, eps=1e-10):
+    dc, y, y_pred = precompute_missing(y, y_pred)
+
+    mse_st = (y - y_pred) ** 2
+    mae_st = np.absolute(y - y_pred)
+
+    mse = sum_elements_per_column(mse_st, dc)
+    mae = sum_elements_per_column(mae_st, dc)
+
+    a = np.absolute(y - y_pred)
+    b = np.absolute(y) + np.absolute(y_pred)+ eps
+    norm_error_st = (a/b)
+
+    norm_error = sum_elements_per_column(norm_error_st, dc)
+
+    return mse, mae, norm_error
+
+
+def z_score_norm(y, y_pred, mean, std, eps=1e-10):
+
+    y = np.array(y)
+    y_pred = np.array(y_pred)
+
+    normalized_true = (y - mean) / std
+
+    normalized_gen = (y_pred - mean) / std
+
+    dc, normalized_true, normalized_gen = precompute_missing(normalized_true, normalized_gen)
+
+    # Calculate MSE using normalized tensors
+    mse_st = (normalized_true - normalized_gen) ** 2
+    mae_st = np.absolute(normalized_true - normalized_gen)
+
+    mse = sum_elements_per_column(mse_st, dc)
+    mae = sum_elements_per_column(mae_st, dc)
+
+    mse = np.sum(mse)/7
+    mae = np.sum(mae)/7
+
+    a = np.absolute(normalized_true - normalized_gen)
+    b = np.absolute(normalized_true) + np.absolute(normalized_gen) + eps
+    norm_error_st = (a/b)
+    norm_error = sum_elements_per_column(norm_error_st, dc)
+    norm_error = np.sum(norm_error)/7
+
+    return mse, mae, norm_error
 
 
 
