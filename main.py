@@ -280,7 +280,7 @@ mae_all = z_score_mae(target, pred, mean, std)
 
 
 print(80*"-")
-print(f"MAE for the samples in all features is equal to: {str(mae_all)}")
+print(f"SCORE: {str(mae_all)}")
 print(80*"-")
 
 # # Save to a CSV file
