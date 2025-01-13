@@ -23,7 +23,7 @@ from torch_geometric.loader import DataLoader
 
 from autoencoder import VariationalAutoEncoder
 from denoise_model import DenoiseNN, p_losses, sample
-from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset
+from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset, construct_nx_from_adj, gen_stats, calculate_mean_std, evaluation_metrics, z_score_norm
 
 
 from torch.utils.data import Subset
@@ -90,10 +90,12 @@ parser.add_argument('--hidden-dim-denoise', type=int, default=512, help="Hidden 
 parser.add_argument('--n-layers_denoise', type=int, default=3, help="Number of layers in the denoising model (default: 3)")
 
 # Flag to toggle training of the autoencoder (VGAE)
-parser.add_argument('--train-autoencoder', action='store_false', default=True, help="Flag to enable/disable autoencoder (VGAE) training (default: enabled)")
+parser.add_argument('--train-autoencoder', action='store_true', default=True, help="Enable training of the autoencoder (default: False)")
+parser.add_argument('--no-train-autoencoder', action='store_false', dest='train_autoencoder', help="Disable training of the autoencoder")
 
 # Flag to toggle training of the diffusion-based denoising model
-parser.add_argument('--train-denoiser', action='store_true', default=True, help="Flag to enable/disable denoiser training (default: enabled)")
+parser.add_argument('--train-denoiser', action='store_true', default=True, help="Enable training of the diffusion-based denoising model (default: True)")
+parser.add_argument('--no-train-denoiser', action='store_false', dest='train_denoiser', help="Disable training of the diffusion-based denoising model")
 
 # Dimensionality of conditioning vectors for conditional generation
 parser.add_argument('--dim-condition', type=int, default=128, help="Dimensionality of conditioning vectors for conditional generation (default: 128)")
@@ -254,35 +256,62 @@ denoise_model.eval()
 
 del train_loader, val_loader
 
-# Save to a CSV file
-with open("output.csv", "w", newline="") as csvfile:
-    writer = csv.writer(csvfile)
-    # Write the header
-    writer.writerow(["graph_id", "edge_list"])
-    for k, data in enumerate(tqdm(test_loader, desc='Processing test set',)):
-        data = data.to(device)
+
+ground_truth = []
+pred = []
+
+for k, data in enumerate(tqdm(test_loader, desc='Processing test set',)):
+    data = data.to(device)
+    stat = data.stats
+    bs = stat.size(0)
+    samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas, batch_size=bs)
+    x_sample = samples[-1]
+    adj = autoencoder.decode_mu(x_sample)
+    stat_d = torch.reshape(stat, (-1, 7))
+    for i in range(stat.size(0)):
+        stat_x = stat_d[i]
+        Gs_generated = construct_nx_from_adj(adj[i,:,:].detach().cpu().numpy())
+        stat_x = stat_x.detach().cpu().numpy()
+        ground_truth.append(stat_x)
+        pred.append(gen_stats(Gs_generated))
+
+mean, std = calculate_mean_std(ground_truth)
+mse, mae, norm_error = evaluation_metrics(ground_truth, pred)
+mse_all, mae_all, norm_error_all = z_score_norm(ground_truth, pred, mean, std)
+
+print(80*"-")  
+print(f"MAE for the samples in all features is equal to: {str(mae_all)}")
+print(80*"-")
+
+# # Save to a CSV file
+# with open("output.csv", "w", newline="") as csvfile:
+#     writer = csv.writer(csvfile)
+#     # Write the header
+#     writer.writerow(["graph_id", "edge_list"])
+#     for k, data in enumerate(tqdm(test_loader, desc='Processing test set',)):
+#         data = data.to(device)
         
-        stat = data.stats
-        bs = stat.size(0)
+#         stat = data.stats
+#         bs = stat.size(0)
 
-        graph_ids = data.filename
+#         graph_ids = data.filename
 
-        samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas, batch_size=bs)
-        x_sample = samples[-1]
-        adj = autoencoder.decode_mu(x_sample)
-        stat_d = torch.reshape(stat, (-1, args.n_condition))
+#         samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas, batch_size=bs)
+#         x_sample = samples[-1]
+#         adj = autoencoder.decode_mu(x_sample)
+#         stat_d = torch.reshape(stat, (-1, args.n_condition))
 
 
-        for i in range(stat.size(0)):
-            stat_x = stat_d[i]
+#         for i in range(stat.size(0)):
+#             stat_x = stat_d[i]
 
-            Gs_generated = construct_nx_from_adj(adj[i,:,:].detach().cpu().numpy())
-            stat_x = stat_x.detach().cpu().numpy()
+#             Gs_generated = construct_nx_from_adj(adj[i,:,:].detach().cpu().numpy())
+#             stat_x = stat_x.detach().cpu().numpy()
 
-            # Define a graph ID
-            graph_id = graph_ids[i]
+#             # Define a graph ID
+#             graph_id = graph_ids[i]
 
-            # Convert the edge list to a single string
-            edge_list_text = ", ".join([f"({u}, {v})" for u, v in Gs_generated.edges()])           
-            # Write the graph ID and the full edge list as a single row
-            writer.writerow([graph_id, edge_list_text])
+#             # Convert the edge list to a single string
+#             edge_list_text = ", ".join([f"({u}, {v})" for u, v in Gs_generated.edges()])           
+#             # Write the graph ID and the full edge list as a single row
+#             writer.writerow([graph_id, edge_list_text])

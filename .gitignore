@@ -1,11 +1,16 @@
+# Ignore Python bytecode files
+__pycache__/
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore system files
+.DS_Store
+
 # Ignore log files
 *.log
 
-# Ignore environment variable files
-.env
-
-# Ignore data directory
+# Ignore data files
 data/
 
-# Ignore Python cache files
-__pycache__/
+*.pth.tar
