@@ -23,8 +23,9 @@ import matplotlib.pyplot as plt
 
 
 
-def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, data_path):
+def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, data_path, output_path):
     dataset_path = os.path.join(data_path, dataset)
+    output_file = os.path.join(output_path, f'dataset_{dataset}.pt')
     data_lst = []
 
     if dataset == 'test':
@@ -33,9 +34,9 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, data_path):
         filename = os.path.join(data_path, f'dataset_{dataset}.pt')
         desc_file = os.path.join(dataset_path, 'test.txt')
 
-        if os.path.isfile(filename):
-            data_lst = torch.load(filename)
-            print(f'Dataset {filename} loaded from file')
+        if os.path.isfile(output_file):
+            data_lst = torch.load(output_file)
+            print(f'Dataset {output_file} loaded from file')
 
         else:
             fr = open(desc_file, "r")
@@ -49,8 +50,8 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, data_path):
                 feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
                 data_lst.append(Data(stats=feats_stats, filename = graph_id))
             fr.close()                    
-            torch.save(data_lst, filename)
-            print(f'Dataset {filename} saved')
+            torch.save(data_lst, output_file)
+            print(f'Dataset {output_file} saved')
 
 
     else:
@@ -61,9 +62,9 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, data_path):
         graph_path = os.path.join(dataset_path, 'graph')
         desc_path = os.path.join(dataset_path, 'description')
 
-        if os.path.isfile(filename):
-            data_lst = torch.load(filename)
-            print(f'Dataset {filename} loaded from file')
+        if os.path.isfile(output_file):
+            data_lst = torch.load(output_file)
+            print(f'Dataset {output_file} loaded from file')
 
         else:
             # traverse through all the graphs of the folder
@@ -142,8 +143,8 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim, data_path):
                 feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
 
                 data_lst.append(Data(x=x, edge_index=edge_index, A=adj, stats=feats_stats, filename = filen))
-            torch.save(data_lst, filename)
-            print(f'Dataset {filename} saved')
+            torch.save(data_lst, output_file)
+            print(f'Dataset {output_file} saved')
     return data_lst
 
 

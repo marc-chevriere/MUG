@@ -108,15 +108,18 @@ parser.add_argument('--lambda-contrastive', type=float, default=0.3, help="Lambd
 
 # Data path for loading the dataset
 parser.add_argument('--data-path', type=str, default='./data', help="Path to the dataset for training and evaluation (default: './data')")
+# Data path for saving the output
+parser.add_argument('--output-path', type=str, default='./data', help="Path to save the output files (default: './data')")
+
 
 args = parser.parse_args()
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 # preprocess train data, validation data and test data. Only once for the first time that you run the code. Then the appropriate .pt files will be saved and loaded.
-trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.data_path)
-validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.data_path)
-testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.data_path)
+trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.data_path, args.output_path)
+validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.data_path, args.output_path)
+testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.data_path, args.output_path)
 
 # initialize data loaders
 train_loader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True)
