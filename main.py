@@ -17,7 +17,7 @@ from datetime import datetime
 import torch
 import torch.nn as nn
 from torch_geometric.data import Data
-
+import wandb
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
 
@@ -103,16 +103,22 @@ parser.add_argument('--dim-condition', type=int, default=128, help="Dimensionali
 # Number of conditions used in conditional vector (number of properties)
 parser.add_argument('--n-condition', type=int, default=7, help="Number of distinct condition properties used in conditional vector (default: 7)")
 
+# Lambda value for contrastive loss
+parser.add_argument('--lambda-contrastive', type=float, default=0.3, help="Lambda value for contrastive loss (default: 0.2)")
+
+# Data path for loading the dataset
+parser.add_argument('--data-path', type=str, default='./data', help="Path to the dataset for training and evaluation (default: './data')")
+
 args = parser.parse_args()
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 # preprocess train data, validation data and test data. Only once for the first time that you run the code. Then the appropriate .pt files will be saved and loaded.
-trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim)
-validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim)
-testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim)
+trainset = preprocess_dataset("train", args.n_max_nodes, args.spectral_emb_dim, args.data_path)
+validset = preprocess_dataset("valid", args.n_max_nodes, args.spectral_emb_dim, args.data_path)
+testset = preprocess_dataset("test", args.n_max_nodes, args.spectral_emb_dim, args.data_path)
 
-
+breakpoint()
 
 # initialize data loaders
 train_loader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True)
@@ -121,10 +127,31 @@ test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False)
 
 
 # initialize VGAE model
-autoencoder = VariationalAutoEncoder(args.spectral_emb_dim+1, args.hidden_dim_encoder, args.hidden_dim_decoder, args.latent_dim, args.n_layers_encoder, args.n_layers_decoder, args.n_max_nodes).to(device)
+autoencoder = VariationalAutoEncoder(
+    args.spectral_emb_dim+1, 
+    args.hidden_dim_encoder, 
+    args.hidden_dim_decoder, 
+    args.latent_dim, 
+    args.n_layers_encoder, 
+    args.n_layers_decoder, 
+    args.n_max_nodes,
+    args.lambda_contrastive).to(device)
 
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
+
+wandb.init(
+    project="NeuralGraphGenerator",
+    name="VGAE_Training",
+    config={
+        "learning_rate": args.lr,
+        "batch_size": args.batch_size,
+        "epochs_autoencoder": args.epochs_autoencoder,
+        "latent_dim": args.latent_dim,
+        "n_layers_encoder": args.n_layers_encoder,
+        "n_layers_decoder": args.n_layers_decoder,
+    }
+)
 
 # Train VGAE model
 if args.train_autoencoder:
@@ -171,6 +198,16 @@ if args.train_autoencoder:
             
         scheduler.step()
 
+        wandb.log({
+            "epoch": epoch,
+            "train_loss": train_loss_all / cnt_train,
+            "train_reconstruction_loss": train_loss_all_recon / cnt_train,
+            "train_kld_loss": train_loss_all_kld / cnt_train,
+            "val_loss": val_loss_all / cnt_val,
+            "val_reconstruction_loss": val_loss_all_recon / cnt_val,
+            "val_kld_loss": val_loss_all_kld / cnt_val,
+        })
+
         if best_val_loss >= val_loss_all:
             best_val_loss = val_loss_all
             torch.save({
@@ -205,6 +242,22 @@ posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 denoise_model = DenoiseNN(input_dim=args.latent_dim, hidden_dim=args.hidden_dim_denoise, n_layers=args.n_layers_denoise, n_cond=args.n_condition, d_cond=args.dim_condition).to(device)
 optimizer = torch.optim.Adam(denoise_model.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
+
+wandb.finish()
+
+wandb.init(
+    project="NeuralGraphGenerator",
+    name="DiffusionModel_Training",
+    config={
+        "learning_rate": args.lr,
+        "batch_size": args.batch_size,
+        "epochs_denoise": args.epochs_denoise,
+        "latent_dim": args.latent_dim,
+        "timesteps": args.timesteps,
+        "hidden_dim_denoise": args.hidden_dim_denoise,
+        "n_layers_denoise": args.n_layers_denoise,
+    }
+)
 
 # Train denoising model
 if args.train_denoiser:
@@ -241,6 +294,12 @@ if args.train_denoiser:
 
         scheduler.step()
 
+        wandb.log({
+            "epoch": epoch,
+            "train_loss_denoise": train_loss_all / train_count,
+            "val_loss_denoise": val_loss_all / val_count,
+        })
+
         if best_val_loss >= val_loss_all:
             best_val_loss = val_loss_all
             torch.save({
@@ -254,7 +313,7 @@ else:
 denoise_model.eval()
 
 del train_loader, val_loader
-
+wandb.finish()
 
 target = []
 pred = []

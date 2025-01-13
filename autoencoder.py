@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch_geometric.nn import GINConv
+from torch_geometric.nn import GINConv, GATConv
 from torch_geometric.nn import global_add_pool
 
 # Decoder
@@ -52,30 +52,54 @@ class condEncoder(nn.Module):
         return self.mlp(x)
 
 
+# class GIN(torch.nn.Module):
+#     def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2):
+#         super().__init__()
+#         self.dropout = dropout
+        
+#         self.convs = torch.nn.ModuleList()
+#         self.convs.append(GINConv(nn.Sequential(nn.Linear(input_dim, hidden_dim),  
+#                             nn.LeakyReLU(0.2),
+#                             nn.BatchNorm1d(hidden_dim),
+#                             nn.Linear(hidden_dim, hidden_dim), 
+#                             nn.LeakyReLU(0.2))
+#                             ))                        
+#         for layer in range(n_layers-1):
+#             self.convs.append(GINConv(nn.Sequential(nn.Linear(hidden_dim, hidden_dim),  
+#                             nn.LeakyReLU(0.2),
+#                             nn.BatchNorm1d(hidden_dim),
+#                             nn.Linear(hidden_dim, hidden_dim), 
+#                             nn.LeakyReLU(0.2))
+#                             )) 
 
-class GIN(torch.nn.Module):
-    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2):
+#         self.bn = nn.BatchNorm1d(hidden_dim)
+#         self.fc = nn.Linear(hidden_dim, latent_dim)
+
+    # def forward(self, data):
+    #     edge_index = data.edge_index
+    #     x = data.x
+
+    #     for conv in self.convs:
+    #         x = conv(x, edge_index)
+    #         x = F.dropout(x, self.dropout, training=self.training)
+
+    #     out = global_add_pool(x, data.batch)
+    #     out = self.bn(out)
+    #     out = self.fc(out)
+    #     return out
+
+class AttentionGIN(torch.nn.Module):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2, heads=3):
         super().__init__()
         self.dropout = dropout
         
         self.convs = torch.nn.ModuleList()
-        self.convs.append(GINConv(nn.Sequential(nn.Linear(input_dim, hidden_dim),  
-                            nn.LeakyReLU(0.2),
-                            nn.BatchNorm1d(hidden_dim),
-                            nn.Linear(hidden_dim, hidden_dim), 
-                            nn.LeakyReLU(0.2))
-                            ))                        
-        for layer in range(n_layers-1):
-            self.convs.append(GINConv(nn.Sequential(nn.Linear(hidden_dim, hidden_dim),  
-                            nn.LeakyReLU(0.2),
-                            nn.BatchNorm1d(hidden_dim),
-                            nn.Linear(hidden_dim, hidden_dim), 
-                            nn.LeakyReLU(0.2))
-                            )) 
+        self.convs.append(GATConv(input_dim, hidden_dim, heads=heads, concat=True))
+        for _ in range(n_layers - 1):
+            self.convs.append(GATConv(hidden_dim * heads, hidden_dim, heads=heads, concat=True))
 
-        self.bn = nn.BatchNorm1d(hidden_dim)
-        self.fc = nn.Linear(hidden_dim, latent_dim)
-        
+        self.bn = nn.BatchNorm1d(hidden_dim * heads)
+        self.fc = nn.Linear(hidden_dim * heads, latent_dim)
 
     def forward(self, data):
         edge_index = data.edge_index
@@ -93,15 +117,16 @@ class GIN(torch.nn.Module):
 
 # Variational Autoencoder
 class VariationalAutoEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes):
+    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, lambda_contrastive):
         super(VariationalAutoEncoder, self).__init__()
         self.n_max_nodes = n_max_nodes
         self.input_dim = input_dim
-        self.encoder = GIN(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
+        self.encoder = AttentionGIN(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
         self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
         self.decoder = Decoder(latent_dim*2, hidden_dim_dec, n_layers_dec, n_max_nodes)
         self.cond_encoder = condEncoder(cond_dim=7,latent_dim=latent_dim)
+        self.lambda_contrastive = lambda_contrastive
 
     def forward(self, data):
         x_g = self.encoder(data)
@@ -128,9 +153,19 @@ class VariationalAutoEncoder(nn.Module):
 
     def decode_mu(self, x_sample, stat):
         cond = self.cond_encoder(stat)
-        x_g = torch.cat((x_sample, cond), dim=1)
-        adj = self.decoder(x_g)
+        x_sample = torch.cat((x_sample, cond), dim=1)
+        adj = self.decoder(x_sample)
         return adj
+    
+    def contrastive_loss(self, z, cond, temperature=0.1):
+        z = F.normalize(z, p=2, dim=1)
+        cond = F.normalize(cond, p=2, dim=1)
+        cond_similarity = torch.mm(cond, cond.T)
+        z_similarity = torch.mm(z, z.T) / temperature
+        labels = torch.softmax(cond_similarity, dim=1)
+        logits = torch.exp(z_similarity) / torch.sum(torch.exp(z_similarity), dim=1, keepdim=True)
+        loss = -torch.sum(labels * torch.log(logits + 1e-9)) / z.size(0)
+        return loss
 
     def loss_function(self, data, beta=0.05):
         x_g  = self.encoder(data)
@@ -138,11 +173,13 @@ class VariationalAutoEncoder(nn.Module):
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar)
         cond = self.cond_encoder(data.stats)
-        x_g = torch.cat((x_g, cond), dim=1)
-        adj = self.decoder(x_g)
+        x_g_cat = torch.cat((x_g, cond), dim=1)
+        adj = self.decoder(x_g_cat)
         
         recon = F.l1_loss(adj, data.A, reduction='mean')
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-        loss = recon + beta*kld
+
+        contrastive_loss = self.contrastive_loss(x_g, cond)
+        loss = (1-self.lambda_contrastive) * (recon + beta * kld) + self.lambda_contrastive * contrastive_loss
 
         return loss, recon, kld
