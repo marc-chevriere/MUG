@@ -75,18 +75,18 @@ class condEncoder(nn.Module):
 #         self.bn = nn.BatchNorm1d(hidden_dim)
 #         self.fc = nn.Linear(hidden_dim, latent_dim)
 
-    # def forward(self, data):
-    #     edge_index = data.edge_index
-    #     x = data.x
+#     def forward(self, data):
+#         edge_index = data.edge_index
+#         x = data.x
 
-    #     for conv in self.convs:
-    #         x = conv(x, edge_index)
-    #         x = F.dropout(x, self.dropout, training=self.training)
+#         for conv in self.convs:
+#             x = conv(x, edge_index)
+#             x = F.dropout(x, self.dropout, training=self.training)
 
-    #     out = global_add_pool(x, data.batch)
-    #     out = self.bn(out)
-    #     out = self.fc(out)
-    #     return out
+#         out = global_add_pool(x, data.batch)
+#         out = self.bn(out)
+#         out = self.fc(out)
+#         return out
 
 # class AttentionGIN(torch.nn.Module):
 #     def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2, heads=3):
@@ -141,11 +141,11 @@ class HybridGINGAT(torch.nn.Module):
                     nn.LeakyReLU(0.2)
                 )))
             else:
-                self.convs.append(GATConv(hidden_dim, hidden_dim, heads=heads, concat=True))
+                self.convs.append(GATConv(hidden_dim, hidden_dim, heads=heads, concat=False))
 
         # Normalisation batch et couche fully connected
-        self.bn = nn.BatchNorm1d(hidden_dim * heads if n_layers-1%2 != 0 else hidden_dim)
-        self.fc = nn.Linear(hidden_dim * heads if n_layers-1%2 != 0 else hidden_dim, latent_dim)
+        self.bn = nn.BatchNorm1d(hidden_dim)
+        self.fc = nn.Linear(hidden_dim, latent_dim)
 
     def forward(self, data):
         edge_index = data.edge_index
