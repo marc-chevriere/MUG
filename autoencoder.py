@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch_geometric.nn import GINConv, GATConv, GlobalAttention
-from torch_geometric.nn import global_add_pool
+from torch_geometric.nn import GINConv, GATConv, GlobalAttention, TopKPooling
+from torch_geometric.nn import global_add_pool, global_mean_pool
+
 
 # Decoder
 class Decoder(nn.Module):
@@ -179,6 +180,188 @@ class GINwAtt(torch.nn.Module):
             x = F.dropout(x, self.dropout, training=self.training)
 
         out = self.att_pool(x, batch)
+        out = self.bn(out)
+        out = self.fc(out)
+        return out
+    
+
+class GINWithTopKPool(nn.Module):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2, pool_ratio=0.8):
+        super().__init__()
+        self.dropout = dropout
+
+        self.convs = nn.ModuleList()
+        self.pools = nn.ModuleList()
+
+        self.convs.append(GINConv(
+            nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.LeakyReLU(0.2),
+                nn.BatchNorm1d(hidden_dim),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.LeakyReLU(0.2)
+            )
+        ))
+        self.pools.append(TopKPooling(hidden_dim, ratio=pool_ratio))
+
+        for _ in range(n_layers-1):
+            self.convs.append(GINConv(
+                nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.LeakyReLU(0.2),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.LeakyReLU(0.2)
+                )
+            ))
+            self.pools.append(TopKPooling(hidden_dim, ratio=pool_ratio))
+
+        self.fc = nn.Linear(hidden_dim, latent_dim)
+
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+        for conv, pool in zip(self.convs, self.pools):
+            x = conv(x, edge_index)
+            x = F.dropout(x, p=self.dropout, training=self.training)
+            x, edge_index, _, batch, _, _ = pool(x, edge_index, None, batch=batch)
+            
+        # Pool global final
+        out = global_mean_pool(x, batch)
+        out = self.fc(out)
+        return out
+    
+
+class GINVirtualNode(nn.Module):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2):
+        super().__init__()
+        self.n_layers = n_layers
+        self.dropout = dropout
+        
+        # 1) Couches GIN
+        self.convs = nn.ModuleList()
+        # Première couche
+        self.convs.append(
+            GINConv(nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.LeakyReLU(0.2),
+                nn.BatchNorm1d(hidden_dim),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.LeakyReLU(0.2)
+            ))
+        )
+        # Couches suivantes
+        for _ in range(n_layers - 1):
+            self.convs.append(
+                GINConv(nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.LeakyReLU(0.2),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.LeakyReLU(0.2)
+                ))
+            )
+
+        # 2) Embedding du nœud virtuel (un pour tout le batch, répliqué par graphe)
+        #    On initialise un vecteur de dimension "hidden_dim"
+        self.virtualnode_embedding = nn.Parameter(torch.zeros(1, hidden_dim))
+        nn.init.xavier_uniform_(self.virtualnode_embedding)
+
+        # 3) MLP pour la mise à jour du nœud virtuel après chaque couche
+        self.mlp_virtualnode = nn.ModuleList()
+        for _ in range(n_layers):
+            self.mlp_virtualnode.append(
+                nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.LeakyReLU(0.2),
+                    nn.Linear(hidden_dim, hidden_dim)
+                )
+            )
+
+        # 4) BatchNorm + Linear pour projection finale
+        self.bn = nn.BatchNorm1d(hidden_dim)
+        self.fc = nn.Linear(hidden_dim, latent_dim)
+
+    def forward(self, data):
+        """
+        data.x : [total_nodes, input_dim]
+        data.edge_index : [2, total_edges]
+        data.batch : [total_nodes] (batch indice pour chaque noeud)
+        """
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+        
+        # On duplique le vecteur virtuel pour chaque graphe du batch
+        batch_size = batch.max().item() + 1
+        vn_batched = self.virtualnode_embedding.repeat(batch_size, 1)  # [batch_size, hidden_dim]
+
+        for layer_idx, conv in enumerate(self.convs):
+            # 1) On “ajoute” l'info du virtual node à chaque nœud
+            #    (simplement en faisant x = x + vn, broadcasté par graphe)
+            x = x + vn_batched[batch]
+
+            # 2) Passage dans la couche GIN
+            x = conv(x, edge_index)
+            x = F.dropout(x, self.dropout, training=self.training)
+
+            # 3) Mise à jour du virtual node
+            #    On agrège (moyenne ou somme) les embeddings des noeuds par graphe
+            vn_update = scatter_mean(x, batch, dim=0)  # [batch_size, hidden_dim]
+            vn_batched = vn_batched + self.mlp_virtualnode[layer_idx](vn_update)
+
+        # Pooling final (on peut choisir sum, mean, etc.)
+        out = global_add_pool(x, batch)
+        out = self.bn(out)
+        out = self.fc(out)
+        return out
+    
+
+class GINSkipConnections(nn.Module):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2):
+        super().__init__()
+        self.n_layers = n_layers
+        self.dropout = dropout
+
+        # Couches GIN
+        self.convs = nn.ModuleList()
+        # Première couche
+        self.convs.append(
+            GINConv(nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.LeakyReLU(0.2),
+                nn.BatchNorm1d(hidden_dim),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.LeakyReLU(0.2)
+            ))
+        )
+        # Couches suivantes
+        for _ in range(n_layers - 1):
+            self.convs.append(
+                GINConv(nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.LeakyReLU(0.2),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.LeakyReLU(0.2)
+                ))
+            )
+        
+        self.bn = nn.BatchNorm1d(hidden_dim)
+        self.fc = nn.Linear(hidden_dim, latent_dim)
+
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+        
+        # On applique les couches GIN avec skip
+        for conv in self.convs:
+            x_res = x  # on garde l'ancienne valeur pour la connexion résiduelle
+            x = conv(x, edge_index)
+            # Option : petite activation avant de faire le skip
+            x = F.leaky_relu(x, negative_slope=0.2)
+            # Ajout de la connexion résiduelle
+            x = x + x_res
+            # Dropout
+            x = F.dropout(x, p=self.dropout, training=self.training)
+
+        out = global_add_pool(x, batch)
         out = self.bn(out)
         out = self.fc(out)
         return out
