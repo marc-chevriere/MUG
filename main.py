@@ -23,7 +23,7 @@ from torch_geometric.loader import DataLoader
 
 from autoencoder import VariationalAutoEncoder
 from denoise_model import DenoiseNN, p_losses, sample
-from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset, construct_nx_from_adj, gen_stats, calculate_mean_std, evaluation_metrics, z_score_norm
+from utils import linear_beta_schedule, construct_nx_from_adj, preprocess_dataset, construct_nx_from_adj, graph_stats, z_score_mae
 
 
 from torch.utils.data import Subset
@@ -257,29 +257,29 @@ denoise_model.eval()
 del train_loader, val_loader
 
 
-ground_truth = []
+target = []
 pred = []
 
 for k, data in enumerate(tqdm(test_loader, desc='Processing test set',)):
     data = data.to(device)
     stat = data.stats
-    bs = stat.size(0)
-    samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas, batch_size=bs)
+    batch_size = stat.size(0)
+    samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas, batch_size=batch_size)
     x_sample = samples[-1]
     adj = autoencoder.decode_mu(x_sample)
-    stat_d = torch.reshape(stat, (-1, 7))
     for i in range(stat.size(0)):
-        stat_x = stat_d[i]
+        stat_x = stat[i].detach().cpu().numpy()
         Gs_generated = construct_nx_from_adj(adj[i,:,:].detach().cpu().numpy())
-        stat_x = stat_x.detach().cpu().numpy()
-        ground_truth.append(stat_x)
-        pred.append(gen_stats(Gs_generated))
+        target.append(stat_x)
+        pred.append(graph_stats(Gs_generated))
+target = np.array(target)
+pred = np.array(pred)
 
-mean, std = calculate_mean_std(ground_truth)
-mse, mae, norm_error = evaluation_metrics(ground_truth, pred)
-mse_all, mae_all, norm_error_all = z_score_norm(ground_truth, pred, mean, std)
+mean, std = np.mean(target, axis=0), np.std(target, axis=0)
+mae_all = z_score_mae(target, pred, mean, std)
 
-print(80*"-")  
+
+print(80*"-")
 print(f"MAE for the samples in all features is equal to: {str(mae_all)}")
 print(80*"-")
 
