@@ -141,21 +141,24 @@ autoencoder = VariationalAutoEncoder(
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
 
-wandb.init(
-    project="NeuralGraphGenerator",
-    name="VGAE_Training",
-    config={
-        "learning_rate": args.lr,
-        "batch_size": args.batch_size,
-        "epochs_autoencoder": args.epochs_autoencoder,
-        "latent_dim": args.latent_dim,
-        "n_layers_encoder": args.n_layers_encoder,
-        "n_layers_decoder": args.n_layers_decoder,
-    }
-)
+
 
 # Train VGAE model
 if args.train_autoencoder:
+
+    wandb.init(
+        project="NeuralGraphGenerator",
+        name="VGAE_Training",
+        config={
+            "learning_rate": args.lr,
+            "batch_size": args.batch_size,
+            "epochs_autoencoder": args.epochs_autoencoder,
+            "latent_dim": args.latent_dim,
+            "n_layers_encoder": args.n_layers_encoder,
+            "n_layers_decoder": args.n_layers_decoder,
+        }
+    )
+
     best_val_loss = np.inf
     for epoch in range(1, args.epochs_autoencoder+1):
         autoencoder.train()
@@ -215,6 +218,7 @@ if args.train_autoencoder:
                 'state_dict': autoencoder.state_dict(),
                 'optimizer' : optimizer.state_dict(),
             }, 'autoencoder.pth.tar')
+    wandb.finish()
 else:
     checkpoint = torch.load('autoencoder.pth.tar')
     autoencoder.load_state_dict(checkpoint['state_dict'])
@@ -244,24 +248,23 @@ denoise_model = DenoiseNN(input_dim=args.latent_dim, hidden_dim=args.hidden_dim_
 optimizer = torch.optim.Adam(denoise_model.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
 
-wandb.finish()
-
-wandb.init(
-    project="NeuralGraphGenerator",
-    name="DiffusionModel_Training",
-    config={
-        "learning_rate": args.lr,
-        "batch_size": args.batch_size,
-        "epochs_denoise": args.epochs_denoise,
-        "latent_dim": args.latent_dim,
-        "timesteps": args.timesteps,
-        "hidden_dim_denoise": args.hidden_dim_denoise,
-        "n_layers_denoise": args.n_layers_denoise,
-    }
-)
 
 # Train denoising model
 if args.train_denoiser:
+    wandb.init(
+        project="NeuralGraphGenerator",
+        name="DiffusionModel_Training",
+        config={
+            "learning_rate": args.lr,
+            "batch_size": args.batch_size,
+            "epochs_denoise": args.epochs_denoise,
+            "latent_dim": args.latent_dim,
+            "timesteps": args.timesteps,
+            "hidden_dim_denoise": args.hidden_dim_denoise,
+            "n_layers_denoise": args.n_layers_denoise,
+        }
+    )
+
     best_val_loss = np.inf
     for epoch in range(1, args.epochs_denoise+1):
         denoise_model.train()
@@ -307,6 +310,7 @@ if args.train_denoiser:
                 'state_dict': denoise_model.state_dict(),
                 'optimizer' : optimizer.state_dict(),
             }, 'denoise_model.pth.tar')
+    wandb.finish()
 else:
     checkpoint = torch.load('denoise_model.pth.tar')
     denoise_model.load_state_dict(checkpoint['state_dict'])
@@ -314,7 +318,7 @@ else:
 denoise_model.eval()
 
 del train_loader, val_loader
-wandb.finish()
+
 
 target = []
 pred = []
