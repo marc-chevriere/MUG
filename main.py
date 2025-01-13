@@ -126,7 +126,6 @@ autoencoder = VariationalAutoEncoder(args.spectral_emb_dim+1, args.hidden_dim_en
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
 
-
 # Train VGAE model
 if args.train_autoencoder:
     best_val_loss = np.inf
@@ -266,7 +265,7 @@ for k, data in enumerate(tqdm(test_loader, desc='Processing test set',)):
     batch_size = stat.size(0)
     samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas, batch_size=batch_size)
     x_sample = samples[-1]
-    adj = autoencoder.decode_mu(x_sample)
+    adj = autoencoder.decode_mu(x_sample, stat)
     for i in range(stat.size(0)):
         stat_x = stat[i].detach().cpu().numpy()
         Gs_generated = construct_nx_from_adj(adj[i,:,:].detach().cpu().numpy())
@@ -298,7 +297,7 @@ print(80*"-")
 
 #         samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas, batch_size=bs)
 #         x_sample = samples[-1]
-#         adj = autoencoder.decode_mu(x_sample)
+#         adj = autoencoder.decode_mu(x_sample, stat)
 #         stat_d = torch.reshape(stat, (-1, args.n_condition))
 
 

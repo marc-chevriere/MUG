@@ -34,6 +34,23 @@ class Decoder(nn.Module):
         return adj
 
 
+class condEncoder(nn.Module):
+
+    def __init__(self, latent_dim, cond_dim):
+        super(condEncoder, self).__init__()
+        # self.fc = nn.Linear(cond_dim, latent_dim)
+        hidden_dim = (latent_dim + cond_dim)//2
+        self.mlp = nn.Sequential(
+            nn.Linear(cond_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, latent_dim),
+        )
+
+    def forward(self, x):
+        return self.mlp(x)
+
 
 
 class GIN(torch.nn.Module):
@@ -83,7 +100,8 @@ class VariationalAutoEncoder(nn.Module):
         self.encoder = GIN(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
         self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
-        self.decoder = Decoder(latent_dim, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        self.decoder = Decoder(latent_dim*2, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        self.cond_encoder = condEncoder(cond_dim=7,latent_dim=latent_dim)
 
     def forward(self, data):
         x_g = self.encoder(data)
@@ -108,20 +126,19 @@ class VariationalAutoEncoder(nn.Module):
         else:
             return mu
 
-    def decode(self, mu, logvar):
-       x_g = self.reparameterize(mu, logvar)
-       adj = self.decoder(x_g)
-       return adj
-
-    def decode_mu(self, mu):
-       adj = self.decoder(mu)
-       return adj
+    def decode_mu(self, x_sample, stat):
+        cond = self.cond_encoder(stat)
+        x_g = torch.cat((x_sample, cond), dim=1)
+        adj = self.decoder(x_g)
+        return adj
 
     def loss_function(self, data, beta=0.05):
         x_g  = self.encoder(data)
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
         x_g = self.reparameterize(mu, logvar)
+        cond = self.cond_encoder(data.stats)
+        x_g = torch.cat((x_g, cond), dim=1)
         adj = self.decoder(x_g)
         
         recon = F.l1_loss(adj, data.A, reduction='mean')
