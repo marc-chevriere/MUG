@@ -22,10 +22,14 @@ class RNNDecoder(nn.Module):
         self.node_proj = nn.Linear(hidden_dim, hidden_dim, bias=False)
         
         self.adj_mlp = nn.Sequential(
-            nn.Linear(2 * hidden_dim, hidden_dim),
+            nn.Linear(2 * hidden_dim, hidden_dim*4),
+            nn.ReLU(),
+            nn.Linear(hidden_dim*4, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 2)
         )
+
+        # self.positional_encoding = nn.Embedding(self.max_nodes, hidden_dim)
         
     def forward(self, z: torch.Tensor, n_nodes: int):
         batch_size = z.size(0)
