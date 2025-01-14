@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from utils import fixed_positional_encoding
+
 
 class RNNDecoder(nn.Module):
     def __init__(self, latent_dim: int, hidden_dim: int, n_layers: int, tau: float = 1.0, hard: bool = True, max_nodes: int = 50):
@@ -26,14 +28,18 @@ class RNNDecoder(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 2)
         )
-        self.embeddings = nn.Embedding(self.max_nodes, latent_dim)
+        # self.embeddings = nn.Embedding(self.max_nodes, latent_dim)
+        positional_encodings = fixed_positional_encoding(max_nodes, latent_dim, device="cpu")
+        self.register_buffer("positional_encodings", positional_encodings)
         
     def forward(self, z: torch.Tensor, n_nodes: int):
         batch_size = z.size(0)
         seq_input = z.unsqueeze(1).repeat(1, self.max_nodes, 1)
-        positions = torch.arange(self.max_nodes, device=seq_input.device)
-        positional_embeddings = self.embeddings(positions)
-        seq_input += positional_embeddings.unsqueeze(0)
+        # positions = torch.arange(self.max_nodes, device=seq_input.device)
+        # positional_embeddings = self.embeddings(positions)
+        # seq_input += positional_embeddings.unsqueeze(0)
+        seq_input += self.positional_encodings.unsqueeze(0)
+
         mask = torch.arange(self.max_nodes, device=z.device).unsqueeze(0).expand(batch_size, self.max_nodes) < n_nodes.unsqueeze(1)
         seq_input[~mask] = 0.0
         packed_input = torch.nn.utils.rnn.pack_padded_sequence(seq_input, n_nodes.cpu(), batch_first=True, enforce_sorted=False)
@@ -57,46 +63,46 @@ class RNNDecoder(nn.Module):
     
 
 
-class AttentionDecoder(nn.Module):
-    def __init__(self, latent_dim, hidden_dim, n_heads, max_nodes):
-        super(AttentionDecoder, self).__init__()
-        self.max_nodes = max_nodes
-        self.input_proj = nn.Linear(latent_dim, hidden_dim)
-        self.positional_encoding = nn.Parameter(torch.randn(max_nodes, hidden_dim))
-        self.attention = nn.MultiheadAttention(hidden_dim, n_heads, batch_first=True)
-        self.output_proj = nn.Linear(hidden_dim, 2)
+# class AttentionDecoder(nn.Module):
+#     def __init__(self, latent_dim, hidden_dim, n_heads, max_nodes):
+#         super(AttentionDecoder, self).__init__()
+#         self.max_nodes = max_nodes
+#         self.input_proj = nn.Linear(latent_dim, hidden_dim)
+#         self.positional_encoding = nn.Parameter(torch.randn(max_nodes, hidden_dim))
+#         self.attention = nn.MultiheadAttention(hidden_dim, n_heads, batch_first=True)
+#         self.output_proj = nn.Linear(hidden_dim, 2)
 
-    def forward(self, x, nb_nodes):
-        # Projeter l'entrée pour obtenir des représentations initiales des nœuds
-        x = self.input_proj(x)
+#     def forward(self, x, nb_nodes):
+#         # Projeter l'entrée pour obtenir des représentations initiales des nœuds
+#         x = self.input_proj(x)
         
-        # Étendre les représentations à max_nodes avec des zéros pour aligner les dimensions
-        x = x.unsqueeze(1).repeat(1, self.max_nodes, 1)
+#         # Étendre les représentations à max_nodes avec des zéros pour aligner les dimensions
+#         x = x.unsqueeze(1).repeat(1, self.max_nodes, 1)
         
-        # Ajouter l'encodage de position
-        x = x + self.positional_encoding
+#         # Ajouter l'encodage de position
+#         x = x + self.positional_encoding
         
-        # Appliquer le mécanisme d'attention
-        x, _ = self.attention(x, x, x)
+#         # Appliquer le mécanisme d'attention
+#         x, _ = self.attention(x, x, x)
         
-        # Projeter les sorties pour obtenir des logits d'arêtes
-        logits = self.output_proj(x)
-        logits = logits[:, :, 0].unsqueeze(-1)  # Extraire les logits
+#         # Projeter les sorties pour obtenir des logits d'arêtes
+#         logits = self.output_proj(x)
+#         logits = logits[:, :, 0].unsqueeze(-1)  # Extraire les logits
         
-        # Reshaper pour correspondre aux arêtes
-        adj_logits = torch.matmul(logits, logits.transpose(1, 2))
+#         # Reshaper pour correspondre aux arêtes
+#         adj_logits = torch.matmul(logits, logits.transpose(1, 2))
         
-        # Appliquer le masque pour garder uniquement les nœuds actifs
-        indices = torch.arange(self.max_nodes, device=x.device).unsqueeze(0)
-        mask = indices < nb_nodes.unsqueeze(1)
-        mask2d = mask.unsqueeze(2) & mask.unsqueeze(1)
-        adj_logits = adj_logits * mask2d.float()
+#         # Appliquer le masque pour garder uniquement les nœuds actifs
+#         indices = torch.arange(self.max_nodes, device=x.device).unsqueeze(0)
+#         mask = indices < nb_nodes.unsqueeze(1)
+#         mask2d = mask.unsqueeze(2) & mask.unsqueeze(1)
+#         adj_logits = adj_logits * mask2d.float()
         
-        # Conversion en matrice d'adjacence avec Gumbel-Softmax
-        adj = F.gumbel_softmax(adj_logits.view(x.size(0), -1, 2), tau=1, hard=True)[:, :, 0]
-        adj = torch.zeros(x.size(0), self.max_nodes, self.max_nodes, device=x.device)
-        idx = torch.triu_indices(self.max_nodes, self.max_nodes, 1)
-        adj[:, idx[0], idx[1]] = adj
-        adj = adj + adj.transpose(1, 2)
+#         # Conversion en matrice d'adjacence avec Gumbel-Softmax
+#         adj = F.gumbel_softmax(adj_logits.view(x.size(0), -1, 2), tau=1, hard=True)[:, :, 0]
+#         adj = torch.zeros(x.size(0), self.max_nodes, self.max_nodes, device=x.device)
+#         idx = torch.triu_indices(self.max_nodes, self.max_nodes, 1)
+#         adj[:, idx[0], idx[1]] = adj
+#         adj = adj + adj.transpose(1, 2)
         
-        return adj
+#         return adj
