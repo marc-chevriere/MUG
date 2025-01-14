@@ -20,7 +20,7 @@ class RNNDecoder(nn.Module):
             num_layers = n_layers, 
             batch_first = True
         )
-        self.node_proj = nn.Linear(hidden_dim, hidden_dim)
+        self.node_proj = nn.Linear(hidden_dim, hidden_dim, bias=False)
         
         self.adj_mlp = nn.Sequential(
             nn.Linear(2 * hidden_dim, hidden_dim),
@@ -35,10 +35,9 @@ class RNNDecoder(nn.Module):
         seq_input[~mask] = 0.0
         packed_input = torch.nn.utils.rnn.pack_padded_sequence(seq_input, n_nodes.cpu(), batch_first=True, enforce_sorted=False)
         rnn_out, _ = self.rnn(packed_input)
-        rnn_out, _ = torch.nn.utils.rnn.pad_packed_sequence(rnn_out, batch_first=True) 
+        rnn_out, _ = torch.nn.utils.rnn.pad_packed_sequence(rnn_out, batch_first=True, total_length=self.max_nodes) 
         node_emb = self.node_proj(rnn_out)
         idx = torch.triu_indices(self.max_nodes, self.max_nodes, offset=1, device=z.device)
-        breakpoint()
         emb_i = node_emb[:, idx[0], :]
         emb_j = node_emb[:, idx[1], :]
         pair_emb = torch.cat([emb_i, emb_j], dim=-1)
