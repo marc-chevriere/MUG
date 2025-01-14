@@ -248,3 +248,15 @@ def z_score_mae(y, y_pred, mean, std):
     normalized_pred = (y_pred - mean) / std
     mae = np.mean(np.abs(normalized_true - normalized_pred))
     return mae
+
+
+def fixed_positional_encoding(max_nodes, latent_dim, device):
+    position = torch.arange(0, max_nodes, dtype=torch.float, device=device).unsqueeze(1)
+    div_term = torch.exp(
+        torch.arange(0, latent_dim, 2, dtype=torch.float, device=device) * 
+        -(torch.log(torch.tensor(10000.0)) / latent_dim)
+    )
+    pe = torch.zeros(max_nodes, latent_dim, device=device)
+    pe[:, 0::2] = torch.sin(position * div_term)  
+    pe[:, 1::2] = torch.cos(position * div_term) 
+    return pe
