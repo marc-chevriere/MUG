@@ -33,7 +33,7 @@ class RNNDecoder(nn.Module):
         seq_input = z.unsqueeze(1).repeat(1, self.max_nodes, 1)
         mask = torch.arange(self.max_nodes, device=z.device).unsqueeze(0).expand(batch_size, self.max_nodes) < n_nodes.unsqueeze(1)
         seq_input[~mask] = 0.0
-        packed_input = torch.nn.utils.rnn.pack_padded_sequence(seq_input, n_nodes, batch_first=True, enforce_sorted=False)
+        packed_input = torch.nn.utils.rnn.pack_padded_sequence(seq_input, n_nodes.cpu(), batch_first=True, enforce_sorted=False)
         rnn_out, _ = self.rnn(packed_input)
         rnn_out, _ = torch.nn.utils.rnn.pad_packed_sequence(rnn_out, batch_first=True) 
         node_emb = self.node_proj(rnn_out)
