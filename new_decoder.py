@@ -38,6 +38,7 @@ class RNNDecoder(nn.Module):
         rnn_out, _ = torch.nn.utils.rnn.pad_packed_sequence(rnn_out, batch_first=True) 
         node_emb = self.node_proj(rnn_out)
         idx = torch.triu_indices(self.max_nodes, self.max_nodes, offset=1, device=z.device)
+        breakpoint()
         emb_i = node_emb[:, idx[0], :]
         emb_j = node_emb[:, idx[1], :]
         pair_emb = torch.cat([emb_i, emb_j], dim=-1)
@@ -45,5 +46,5 @@ class RNNDecoder(nn.Module):
         adjacency_values = F.gumbel_softmax(logits, tau=self.tau, hard=self.hard, dim=-1)[..., 0] 
         adj = torch.zeros(batch_size, self.max_nodes, self.max_nodes, device=z.device)
         adj[:, idx[0], idx[1]] = adjacency_values
-        adj[:, idx[1], idx[0]] = adjacency_values 
+        adj = adj + torch.transpose(adj, 1, 2)
         return adj

@@ -10,19 +10,19 @@ from new_decoder import RNNDecoder
 
 # Decoder
 class Decoder(nn.Module):
-    def __init__(self, latent_dim, hidden_dim, n_layers, n_nodes):
+    def __init__(self, latent_dim, hidden_dim, n_layers, max_nodes):
         super(Decoder, self).__init__()
         self.n_layers = n_layers
-        self.n_nodes = n_nodes
+        self.max_nodes = max_nodes
 
         mlp_layers = [nn.Linear(latent_dim, hidden_dim)] + [nn.Linear(hidden_dim, hidden_dim) for i in range(n_layers-2)]
-        mlp_layers.append(nn.Linear(hidden_dim, 2*n_nodes*(n_nodes-1)//2))
+        mlp_layers.append(nn.Linear(hidden_dim, 2*max_nodes*(max_nodes-1)//2))
 
         self.mlp = nn.ModuleList(mlp_layers)
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
 
-    def forward(self, x):
+    def forward(self, x, nb_nodes):
         for i in range(self.n_layers-1):
             x = self.relu(self.mlp[i](x))
         
@@ -30,10 +30,15 @@ class Decoder(nn.Module):
         x = torch.reshape(x, (x.size(0), -1, 2))
         x = F.gumbel_softmax(x, tau=1, hard=True)[:,:,0]
 
-        adj = torch.zeros(x.size(0), self.n_nodes, self.n_nodes, device=x.device)
-        idx = torch.triu_indices(self.n_nodes, self.n_nodes, 1)
+        adj = torch.zeros(x.size(0), self.max_nodes, self.max_nodes, device=x.device)
+        idx = torch.triu_indices(self.max_nodes, self.max_nodes, 1)
         adj[:,idx[0],idx[1]] = x
         adj = adj + torch.transpose(adj, 1, 2)
+
+        indices = torch.arange(self.max_nodes, device=x.device).unsqueeze(0)  
+        mask = indices < nb_nodes.unsqueeze(1) 
+        mask2d = mask.unsqueeze(2) & mask.unsqueeze(1)
+        adj = adj * mask2d.float()
         return adj
 
 
@@ -149,8 +154,8 @@ class VariationalAutoEncoder(nn.Module):
         self.encoder = GINwAtt(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
         self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
-        # self.decoder = Decoder(latent_dim*2, hidden_dim_dec, n_layers_dec, n_max_nodes)
-        self.decoder = RNNDecoder(latent_dim*2, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        self.decoder = Decoder(latent_dim*2, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        # self.decoder = RNNDecoder(latent_dim*2, hidden_dim_dec, n_layers_dec, n_max_nodes)
         self.cond_encoder = condEncoder(cond_dim=7,latent_dim=latent_dim)
         self.lambda_contrastive = lambda_contrastive
         self.beta = beta
@@ -201,7 +206,7 @@ class VariationalAutoEncoder(nn.Module):
         x_g = self.reparameterize(mu, logvar)
         cond = self.cond_encoder(data.stats)
         x_g_cat = torch.cat((x_g, cond), dim=1)
-        adj = self.decoder(z=x_g_cat, n_nodes=data.stats[:,0])
+        adj = self.decoder(x_g_cat, data.stats[:,0])
         
         recon = F.l1_loss(adj, data.A, reduction='mean')
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
