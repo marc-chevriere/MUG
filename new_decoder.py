@@ -22,18 +22,18 @@ class RNNDecoder(nn.Module):
         self.node_proj = nn.Linear(hidden_dim, hidden_dim, bias=False)
         
         self.adj_mlp = nn.Sequential(
-            nn.Linear(2 * hidden_dim, hidden_dim*4),
-            nn.ReLU(),
-            nn.Linear(hidden_dim*4, hidden_dim),
+            nn.Linear(2 * hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 2)
         )
-
-        # self.positional_encoding = nn.Embedding(self.max_nodes, hidden_dim)
+        self.embeddings = nn.Embedding(self.max_nodes, latent_dim)
         
     def forward(self, z: torch.Tensor, n_nodes: int):
         batch_size = z.size(0)
         seq_input = z.unsqueeze(1).repeat(1, self.max_nodes, 1)
+        positions = torch.arange(self.max_nodes, device=seq_input.device)
+        positional_embeddings = self.embeddings(positions)
+        seq_input += positional_embeddings.unsqueeze(0)
         mask = torch.arange(self.max_nodes, device=z.device).unsqueeze(0).expand(batch_size, self.max_nodes) < n_nodes.unsqueeze(1)
         seq_input[~mask] = 0.0
         packed_input = torch.nn.utils.rnn.pack_padded_sequence(seq_input, n_nodes.cpu(), batch_first=True, enforce_sorted=False)
