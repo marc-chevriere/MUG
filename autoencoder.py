@@ -143,7 +143,7 @@ class GINwAtt(torch.nn.Module):
 
 # Variational Autoencoder
 class VariationalAutoEncoder(nn.Module):
-    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, lambda_contrastive):
+    def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, lambda_contrastive, beta=0.05):
         super(VariationalAutoEncoder, self).__init__()
         self.n_max_nodes = n_max_nodes
         self.input_dim = input_dim
@@ -154,6 +154,7 @@ class VariationalAutoEncoder(nn.Module):
         self.decoder = GraphAttentionDecoderGlobal(latent_dim*2, n_max_nodes)
         self.cond_encoder = condEncoder(cond_dim=7,latent_dim=latent_dim)
         self.lambda_contrastive = lambda_contrastive
+        self.beta = beta
 
     def forward(self, data):
         x_g = self.encoder(data)
@@ -194,7 +195,7 @@ class VariationalAutoEncoder(nn.Module):
         loss = -torch.sum(labels * torch.log(logits + 1e-9)) / z.size(0)
         return loss
 
-    def loss_function(self, data, beta=0.05):
+    def loss_function(self, data):
         x_g  = self.encoder(data)
         mu = self.fc_mu(x_g)
         logvar = self.fc_logvar(x_g)
@@ -207,6 +208,6 @@ class VariationalAutoEncoder(nn.Module):
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
         contrastive_loss = self.contrastive_loss(x_g, cond)
-        loss = (1-self.lambda_contrastive) * (recon + beta * kld) + self.lambda_contrastive * contrastive_loss
+        loss = (1-self.lambda_contrastive) * (recon + self.beta * kld) + self.lambda_contrastive * contrastive_loss
 
         return loss, recon, kld

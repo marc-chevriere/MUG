@@ -106,6 +106,9 @@ parser.add_argument('--n-condition', type=int, default=7, help="Number of distin
 # Lambda value for contrastive loss
 parser.add_argument('--lambda-contrastive', type=float, default=0, help="Lambda value for contrastive loss (default: 0.2)")
 
+# Beta value for KL divergence in the VAE loss
+parser.add_argument('--beta', type=float, default=0.05, help="Beta value for KL divergence in the VAE loss (default: 0.05)")
+
 # Data path for loading the dataset
 parser.add_argument('--data-path', type=str, default='./data', help="Path to the dataset for training and evaluation (default: './data')")
 # Data path for saving the output
@@ -136,7 +139,8 @@ autoencoder = VariationalAutoEncoder(
     args.n_layers_encoder, 
     args.n_layers_decoder, 
     args.n_max_nodes,
-    args.lambda_contrastive).to(device)
+    args.lambda_contrastive,
+    args.beta).to(device)
 
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
