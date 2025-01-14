@@ -141,7 +141,6 @@ autoencoder = VariationalAutoEncoder(
 optimizer = torch.optim.Adam(autoencoder.parameters(), lr=args.lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=500, gamma=0.1)
 
-breakpoint()
 
 # Train VGAE model
 if args.train_autoencoder:
