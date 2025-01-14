@@ -4,6 +4,7 @@ import torch.nn.functional as F
 
 from torch_geometric.nn import GINConv, GATConv, GlobalAttention, TopKPooling
 from torch_geometric.nn import global_add_pool, global_mean_pool
+from torch_scatter import scatter_mean
 
 
 # Decoder
@@ -229,90 +230,7 @@ class GINWithTopKPool(nn.Module):
         out = global_mean_pool(x, batch)
         out = self.fc(out)
         return out
-    
 
-class GINVirtualNode(nn.Module):
-    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2):
-        super().__init__()
-        self.n_layers = n_layers
-        self.dropout = dropout
-        
-        # 1) Couches GIN
-        self.convs = nn.ModuleList()
-        # Première couche
-        self.convs.append(
-            GINConv(nn.Sequential(
-                nn.Linear(input_dim, hidden_dim),
-                nn.LeakyReLU(0.2),
-                nn.BatchNorm1d(hidden_dim),
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.LeakyReLU(0.2)
-            ))
-        )
-        # Couches suivantes
-        for _ in range(n_layers - 1):
-            self.convs.append(
-                GINConv(nn.Sequential(
-                    nn.Linear(hidden_dim, hidden_dim),
-                    nn.LeakyReLU(0.2),
-                    nn.BatchNorm1d(hidden_dim),
-                    nn.Linear(hidden_dim, hidden_dim),
-                    nn.LeakyReLU(0.2)
-                ))
-            )
-
-        # 2) Embedding du nœud virtuel (un pour tout le batch, répliqué par graphe)
-        #    On initialise un vecteur de dimension "hidden_dim"
-        self.virtualnode_embedding = nn.Parameter(torch.zeros(1, hidden_dim))
-        nn.init.xavier_uniform_(self.virtualnode_embedding)
-
-        # 3) MLP pour la mise à jour du nœud virtuel après chaque couche
-        self.mlp_virtualnode = nn.ModuleList()
-        for _ in range(n_layers):
-            self.mlp_virtualnode.append(
-                nn.Sequential(
-                    nn.Linear(hidden_dim, hidden_dim),
-                    nn.LeakyReLU(0.2),
-                    nn.Linear(hidden_dim, hidden_dim)
-                )
-            )
-
-        # 4) BatchNorm + Linear pour projection finale
-        self.bn = nn.BatchNorm1d(hidden_dim)
-        self.fc = nn.Linear(hidden_dim, latent_dim)
-
-    def forward(self, data):
-        """
-        data.x : [total_nodes, input_dim]
-        data.edge_index : [2, total_edges]
-        data.batch : [total_nodes] (batch indice pour chaque noeud)
-        """
-        x, edge_index, batch = data.x, data.edge_index, data.batch
-        
-        # On duplique le vecteur virtuel pour chaque graphe du batch
-        batch_size = batch.max().item() + 1
-        vn_batched = self.virtualnode_embedding.repeat(batch_size, 1)  # [batch_size, hidden_dim]
-
-        for layer_idx, conv in enumerate(self.convs):
-            # 1) On “ajoute” l'info du virtual node à chaque nœud
-            #    (simplement en faisant x = x + vn, broadcasté par graphe)
-            x = x + vn_batched[batch]
-
-            # 2) Passage dans la couche GIN
-            x = conv(x, edge_index)
-            x = F.dropout(x, self.dropout, training=self.training)
-
-            # 3) Mise à jour du virtual node
-            #    On agrège (moyenne ou somme) les embeddings des noeuds par graphe
-            vn_update = scatter_mean(x, batch, dim=0)  # [batch_size, hidden_dim]
-            vn_batched = vn_batched + self.mlp_virtualnode[layer_idx](vn_update)
-
-        # Pooling final (on peut choisir sum, mean, etc.)
-        out = global_add_pool(x, batch)
-        out = self.bn(out)
-        out = self.fc(out)
-        return out
-    
 
 class GINSkipConnections(nn.Module):
     def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2):
@@ -366,13 +284,97 @@ class GINSkipConnections(nn.Module):
         out = self.fc(out)
         return out
 
+class GINVirtualNode(nn.Module):
+    def __init__(self, input_dim, hidden_dim, latent_dim, n_layers, dropout=0.2):
+        super().__init__()
+        self.n_layers = n_layers
+        self.dropout = dropout
+        
+        # 1) Projection initiale des features des nœuds
+        self.node_proj = nn.Linear(input_dim, hidden_dim)
+
+        # 2) Couches GIN
+        self.convs = nn.ModuleList()
+        self.convs.append(
+            GINConv(nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.LeakyReLU(0.2),
+                nn.BatchNorm1d(hidden_dim),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.LeakyReLU(0.2)
+            ))
+        )
+        for _ in range(n_layers - 1):
+            self.convs.append(
+                GINConv(nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.LeakyReLU(0.2),
+                    nn.BatchNorm1d(hidden_dim),
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.LeakyReLU(0.2)
+                ))
+            )
+
+        # 3) Embedding du nœud virtuel (un pour tout le batch, répliqué par graphe)
+        self.virtualnode_embedding = nn.Parameter(torch.zeros(1, hidden_dim))
+        nn.init.xavier_uniform_(self.virtualnode_embedding)
+
+        # 4) MLP pour la mise à jour du nœud virtuel après chaque couche
+        self.mlp_virtualnode = nn.ModuleList()
+        for _ in range(n_layers):
+            self.mlp_virtualnode.append(
+                nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.LeakyReLU(0.2),
+                    nn.Linear(hidden_dim, hidden_dim)
+                )
+            )
+
+        # 5) BatchNorm + Linear pour projection finale
+        self.bn = nn.BatchNorm1d(hidden_dim)
+        self.fc = nn.Linear(hidden_dim, latent_dim)
+
+    def forward(self, data):
+        """
+        data.x : [total_nodes, input_dim]
+        data.edge_index : [2, total_edges]
+        data.batch : [total_nodes] (batch indice pour chaque noeud)
+        """
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+
+        # 1) Projection initiale des features des nœuds
+        x = self.node_proj(x)
+
+        # 2) On duplique le vecteur virtuel pour chaque graphe du batch
+        batch_size = batch.max().item() + 1
+        vn_batched = self.virtualnode_embedding.repeat(batch_size, 1)  # [batch_size, hidden_dim]
+
+        for layer_idx, conv in enumerate(self.convs):
+            # 3) On “ajoute” l'info du virtual node à chaque nœud
+            x = x + vn_batched[batch]
+
+            # 4) Passage dans la couche GIN
+            x = conv(x, edge_index)
+            x = F.dropout(x, self.dropout, training=self.training)
+
+            # 5) Mise à jour du virtual node
+            vn_update = scatter_mean(x, batch, dim=0)  # [batch_size, hidden_dim]
+            vn_batched = vn_batched + self.mlp_virtualnode[layer_idx](vn_update)
+
+        # 6) Pooling final (on peut choisir sum, mean, etc.)
+        out = global_add_pool(x, batch)
+        out = self.bn(out)
+        out = self.fc(out)
+        return out
+    
+
 # Variational Autoencoder
 class VariationalAutoEncoder(nn.Module):
     def __init__(self, input_dim, hidden_dim_enc, hidden_dim_dec, latent_dim, n_layers_enc, n_layers_dec, n_max_nodes, lambda_contrastive):
         super(VariationalAutoEncoder, self).__init__()
         self.n_max_nodes = n_max_nodes
         self.input_dim = input_dim
-        self.encoder = GINwAtt(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
+        self.encoder = GINVirtualNode(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
         self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
         self.decoder = Decoder(latent_dim*2, hidden_dim_dec, n_layers_dec, n_max_nodes)
