@@ -4,9 +4,8 @@ import torch.nn.functional as F
 
 from torch_geometric.nn import GINConv, GATConv, GlobalAttention, TopKPooling
 from torch_geometric.nn import global_add_pool, global_mean_pool
-from torch_scatter import scatter_mean
 
-from att_decoder import GraphAttentionDecoderGlobal
+from new_decoder import RNNDecoder
 
 
 # Decoder
@@ -150,8 +149,8 @@ class VariationalAutoEncoder(nn.Module):
         self.encoder = GINwAtt(input_dim, hidden_dim_enc, hidden_dim_enc, n_layers_enc)
         self.fc_mu = nn.Linear(hidden_dim_enc, latent_dim)
         self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
-        self.decoder = Decoder(latent_dim*2, hidden_dim_dec, n_layers_dec, n_max_nodes)
-        # self.decoder = GraphAttentionDecoderGlobal(latent_dim*2, n_max_nodes)
+        # self.decoder = Decoder(latent_dim*2, hidden_dim_dec, n_layers_dec, n_max_nodes)
+        self.decoder = RNNDecoder(latent_dim*2, hidden_dim_dec, n_layers_dec, n_max_nodes)
         self.cond_encoder = condEncoder(cond_dim=7,latent_dim=latent_dim)
         self.lambda_contrastive = lambda_contrastive
         self.beta = beta
@@ -182,7 +181,7 @@ class VariationalAutoEncoder(nn.Module):
     def decode_mu(self, x_sample, stat):
         cond = self.cond_encoder(stat)
         x_sample = torch.cat((x_sample, cond), dim=1)
-        adj = self.decoder(x_sample)
+        adj = self.decoder(x_sample, stat[:,0])
         return adj
     
     def contrastive_loss(self, z, cond, temperature=0.1):
@@ -202,7 +201,7 @@ class VariationalAutoEncoder(nn.Module):
         x_g = self.reparameterize(mu, logvar)
         cond = self.cond_encoder(data.stats)
         x_g_cat = torch.cat((x_g, cond), dim=1)
-        adj = self.decoder(x_g_cat)
+        adj = self.decoder(z=x_g_cat, n_nodes=data.stats[:,0])
         
         recon = F.l1_loss(adj, data.A, reduction='mean')
         kld = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
