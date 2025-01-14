@@ -10,6 +10,7 @@ import community as community_louvain
 
 from torch import Tensor
 from torch.utils.data import Dataset
+from numpy import errstate
 
 from grakel.utils import graph_from_networkx
 from grakel.kernels import WeisfeilerLehman, VertexHistogram
@@ -19,14 +20,39 @@ from torch_geometric.data import Data
 
 from extract_feats import extract_feats, extract_numbers
 
+from transformers import AutoTokenizer, AutoModel
 
+
+#LM TO TEST :
+#bert-base-uncased
+#roberta-base
+#distilbert-base-uncased
+#huawei-noah/TinyBERT_General_4L_312D  #moins gpurmand
+
+#from transformers import T5Tokenizer, T5Model
+#tokenizer = T5Tokenizer.from_pretrained("t5-base")
+#model = T5Model.from_pretrained("t5-base")
+
+#from transformers import XLNetTokenizer, XLNetModel
+#tokenizer = XLNetTokenizer.from_pretrained("xlnet-base-cased")
+#model = XLNetModel.from_pretrained("xlnet-base-cased")
+
+
+    # Charger le modèle via une connexion distante
+model_name = "huawei-noah/TinyBERT_General_4L_312D"  # Exemple : TinyBERT
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModel.from_pretrained(model_name).to(device)
+print(f"Model {model_name} loaded on device: {next(model.parameters()).device}")
 
 def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+
 
     data_lst = []
     if dataset == 'test':
-        filename = './data/dataset_'+dataset+'.pt'
-        desc_file = './data/'+dataset+'/test.txt'
+        filename = './data/dataset_' + dataset + '.pt'
+        desc_file = './data/' + dataset + '/test.txt'
 
         if os.path.isfile(filename):
             data_lst = torch.load(filename)
@@ -40,100 +66,75 @@ def preprocess_dataset(dataset, n_max_nodes, spectral_emb_dim):
                 graph_id = tokens[0]
                 desc = tokens[1:]
                 desc = "".join(desc)
-                feats_stats = extract_numbers(desc)
-                feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
-                data_lst.append(Data(stats=feats_stats, filename = graph_id))
-            fr.close()                    
+
+                # Encode the description using the language model
+                inputs = tokenizer(desc, return_tensors="pt", truncation=True, padding=True).to(device)
+                outputs = model(**inputs)
+                feats_stats = outputs.last_hidden_state.mean(dim=1).cpu()
+
+                data_lst.append(Data(stats=feats_stats, filename=graph_id))
+            fr.close()
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
 
-
     else:
-        filename = './data/dataset_'+dataset+'.pt'
-        graph_path = './data/'+dataset+'/graph'
-        desc_path = './data/'+dataset+'/description'
+        filename = './data/dataset_' + dataset + '.pt'
+        graph_path = './data/' + dataset + '/graph'
+        desc_path = './data/' + dataset + '/description'
 
         if os.path.isfile(filename):
             data_lst = torch.load(filename)
             print(f'Dataset {filename} loaded from file')
 
         else:
-            # traverse through all the graphs of the folder
             files = [f for f in os.listdir(graph_path)]
-            adjs = []
-            eigvals = []
-            eigvecs = []
-            n_nodes = []
-            max_eigval = 0
-            min_eigval = 0
             for fileread in tqdm(files):
                 tokens = fileread.split("/")
                 idx = tokens[-1].find(".")
                 filen = tokens[-1][:idx]
-                extension = tokens[-1][idx+1:]
-                fread = os.path.join(graph_path,fileread)
-                fstats = os.path.join(desc_path,filen+".txt")
-                #load dataset to networkx
-                if extension=="graphml":
+                extension = tokens[-1][idx + 1:]
+                fread = os.path.join(graph_path, fileread)
+                fstats = os.path.join(desc_path, filen + ".txt")
+
+                if extension == "graphml":
                     G = nx.read_graphml(fread)
-                    # Convert node labels back to tuples since GraphML stores them as strings
-                    G = nx.convert_node_labels_to_integers(
-                        G, ordering="sorted"
-                    )
+                    G = nx.convert_node_labels_to_integers(G, ordering="sorted")
                 else:
                     G = nx.read_edgelist(fread)
-                # use canonical order (BFS) to create adjacency matrix
-                ### BFS & DFS from largest-degree node
 
-                
                 CGs = [G.subgraph(c) for c in nx.connected_components(G)]
-
-                # rank connected componets from large to small size
                 CGs = sorted(CGs, key=lambda x: x.number_of_nodes(), reverse=True)
 
                 node_list_bfs = []
                 for ii in range(len(CGs)):
                     node_degree_list = [(n, d) for n, d in CGs[ii].degree()]
-                    degree_sequence = sorted(
-                    node_degree_list, key=lambda tt: tt[1], reverse=True)
-
+                    degree_sequence = sorted(node_degree_list, key=lambda tt: tt[1], reverse=True)
                     bfs_tree = nx.bfs_tree(CGs[ii], source=degree_sequence[0][0])
                     node_list_bfs += list(bfs_tree.nodes())
 
                 adj_bfs = nx.to_numpy_array(G, nodelist=node_list_bfs)
-
                 adj = torch.from_numpy(adj_bfs).float()
                 diags = np.sum(adj_bfs, axis=0)
-                diags = np.squeeze(np.asarray(diags))
                 D = sparse.diags(diags).toarray()
                 L = D - adj_bfs
-                with sp.errstate(divide="ignore"):
-                    diags_sqrt = 1.0 / np.sqrt(diags)
-                diags_sqrt[np.isinf(diags_sqrt)] = 0
-                DH = sparse.diags(diags).toarray()
-                L = np.linalg.multi_dot((DH, L, DH))
-                L = torch.from_numpy(L).float()
-                eigval, eigvecs = torch.linalg.eigh(L)
-                eigval = torch.real(eigval)
-                eigvecs = torch.real(eigvecs)
-                idx = torch.argsort(eigval)
-                eigvecs = eigvecs[:,idx]
+                eigval, eigvecs = np.linalg.eigh(L)
+                eigvecs = torch.tensor(eigvecs[:, :spectral_emb_dim], dtype=torch.float)
 
                 edge_index = torch.nonzero(adj).t()
-
-                size_diff = n_max_nodes - G.number_of_nodes()
-                x = torch.zeros(G.number_of_nodes(), spectral_emb_dim+1)
-                x[:,0] = torch.mm(adj, torch.ones(G.number_of_nodes(), 1))[:,0]/(n_max_nodes-1)
-                mn = min(G.number_of_nodes(),spectral_emb_dim)
-                mn+=1
-                x[:,1:mn] = eigvecs[:,:spectral_emb_dim]
-                adj = F.pad(adj, [0, size_diff, 0, size_diff])
+                x = torch.zeros(G.number_of_nodes(), spectral_emb_dim + 1)
+                x[:, 0] = adj.sum(axis=1) / (n_max_nodes - 1)
+                x[:, 1:] = eigvecs[:, :spectral_emb_dim]
+                adj = F.pad(adj, [0, n_max_nodes - G.number_of_nodes(), 0, n_max_nodes - G.number_of_nodes()])
                 adj = adj.unsqueeze(0)
 
-                feats_stats = extract_feats(fstats)
-                feats_stats = torch.FloatTensor(feats_stats).unsqueeze(0)
+                # Encode the description using the language model
+                with open(fstats, "r") as f:
+                    desc = f.read().strip()
+                inputs = tokenizer(desc, return_tensors="pt", truncation=True, padding=True).to(device)
+                outputs = model(**inputs)
+                feats_stats = outputs.last_hidden_state.mean(dim=1).cpu()
 
-                data_lst.append(Data(x=x, edge_index=edge_index, A=adj, stats=feats_stats, filename = filen))
+                data_lst.append(Data(x=x, edge_index=edge_index, A=adj, stats=feats_stats, filename=filen))
             torch.save(data_lst, filename)
             print(f'Dataset {filename} saved')
     return data_lst
@@ -221,8 +222,3 @@ def sigmoid_beta_schedule(timesteps):
     beta_end = 0.02
     betas = torch.linspace(-6, 6, timesteps)
     return torch.sigmoid(betas) * (beta_end - beta_start) + beta_start
-
-
-
-
-
