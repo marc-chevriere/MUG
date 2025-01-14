@@ -50,4 +50,3 @@ class RNNDecoder(nn.Module):
         mask2d = mask.unsqueeze(2) & mask.unsqueeze(1)
         adj = adj * mask2d.float()
         return adj
-        return adj
