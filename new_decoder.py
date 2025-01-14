@@ -45,7 +45,7 @@ class RNNDecoder(nn.Module):
         adj = torch.zeros(batch_size, self.max_nodes, self.max_nodes, device=z.device)
         adj[:, idx[0], idx[1]] = adjacency_values
         adj = adj + torch.transpose(adj, 1, 2)
-        indices = torch.arange(self.max_nodes, device=x.device).unsqueeze(0)  
+        indices = torch.arange(self.max_nodes).unsqueeze(0)  
         mask = indices < n_nodes.unsqueeze(1) 
         mask2d = mask.unsqueeze(2) & mask.unsqueeze(1)
         adj = adj * mask2d.float()
