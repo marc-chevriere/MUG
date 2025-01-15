@@ -23,7 +23,6 @@ class RNNDecoder(nn.Module):
             batch_first = True
         )
         self.node_proj = nn.Linear(hidden_dim, hidden_dim, bias=False)
-        self.proj_cat = nn.Linear(2 * latent_dim, latent_dim)
         
         self.adj_mlp = nn.Sequential(
             nn.Linear(2 * hidden_dim, hidden_dim),
@@ -39,9 +38,7 @@ class RNNDecoder(nn.Module):
         seq_input = z.unsqueeze(1).repeat(1, self.max_nodes, 1)
         positions = torch.arange(self.max_nodes, device=z.device)
         positional_embeddings = self.embeddings(positions).repeat(batch_size, 1, 1)
-        seq_input = torch.cat((seq_input, positional_embeddings), dim=-1)
-        seq_input = self.proj_cat(seq_input)
-        # seq_input += self.positional_embeddings
+        seq_input += positional_embeddings
         # seq_input += self.positional_encodings.unsqueeze(0)
 
         mask = torch.arange(self.max_nodes, device=z.device).unsqueeze(0).expand(batch_size, self.max_nodes) < n_nodes.unsqueeze(1)
@@ -195,41 +192,42 @@ class RNNDecoder(nn.Module):
 
 
 class AttentionDecoder(nn.Module):
-    def __init__(self, latent_dim, hidden_dim, n_heads, max_nodes):
+    def __init__(self, latent_dim, hidden_dim, max_nodes, tau: float = 1.0, hard: bool = True):
         super(AttentionDecoder, self).__init__()
         self.max_nodes = max_nodes
-        hidden_dim = (hidden_dim // n_heads)*n_heads
-        self.input_proj = nn.Linear(latent_dim, hidden_dim)
-        self.positional_encoding = nn.Parameter(torch.randn(max_nodes, hidden_dim))
-        self.attention = nn.MultiheadAttention(hidden_dim, n_heads, batch_first=True)
-        self.output_proj = nn.Linear(hidden_dim, 2)
+        self.embeddings = nn.Embedding(self.max_nodes, latent_dim)
+        self.transformer = nn.TransformerEncoder(
+            nn.TransformerEncoderLayer(d_model=latent_dim*2, nhead=4),
+            num_layers=2
+        )
+        self.adj_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 2)
+        )
+        self.tau = tau
+        self.hard = hard
 
-    def forward(self, x, nb_nodes, n_edges):
-        breakpoint()
-        batch_size = x.size(0)
-        # Projeter l'entrée pour obtenir des représentations initiales des nœuds
-        x = self.input_proj(x)
-        
-        # Étendre les représentations à max_nodes avec des zéros pour aligner les dimensions
-        x = x.unsqueeze(1).repeat(1, self.max_nodes, 1)
-        
-        # Ajouter l'encodage de position
-        x = x + self.positional_encoding
-        
-        # Appliquer le mécanisme d'attention
-        x, _ = self.attention(x, x, x)
-        
+    def forward(self, z, n_nodes, n_edges):
+        batch_size = z.size(0)
+        seq_input = z.unsqueeze(1).repeat(1, self.max_nodes, 1)
+        positions = torch.arange(self.max_nodes, device=z.device)
+        positional_embeddings = self.embeddings(positions).repeat(batch_size, 1, 1)
+        seq_input = torch.cat((seq_input, positional_embeddings), dim=-1)
+        node_emb = self.transformer(seq_input)
+        mask = torch.arange(self.max_nodes, device=z.device).unsqueeze(0).expand(batch_size, self.max_nodes) < n_nodes.unsqueeze(1)
+        node_emb[~mask] = 0.0
         idx = torch.triu_indices(self.max_nodes, self.max_nodes, offset=1, device=z.device)
-        emb_i = x[:, idx[0], :]
-        emb_j = x[:, idx[1], :]
+        emb_i = node_emb[:, idx[0], :]
+        emb_j = node_emb[:, idx[1], :]
         pair_emb = torch.cat([emb_i, emb_j], dim=-1)
         logits = self.adj_mlp(pair_emb)
         adjacency_values = F.gumbel_softmax(logits, tau=self.tau, hard=self.hard, dim=-1)[..., 0]
         adj = torch.zeros(batch_size, self.max_nodes, self.max_nodes, device=z.device)
         adj[:, idx[0], idx[1]] = adjacency_values
         adj = adj + torch.transpose(adj, 1, 2)
-        indices = torch.arange(self.max_nodes, device=x.device).unsqueeze(0)  
-        mask = indices < nb_nodes.unsqueeze(1) 
+        indices = torch.arange(self.max_nodes, device=z.device).unsqueeze(0)  
+        mask = indices < n_nodes.unsqueeze(1) 
         mask2d = mask.unsqueeze(2) & mask.unsqueeze(1)
         adj = adj * mask2d.float()
         return adj
