@@ -31,18 +31,18 @@ class RNNDecoder(nn.Module):
         )
         # self.pairwise_attention = PairwiseAttention(hidden_dim=self.hidden_dim, num_heads=4)
         self.embeddings = nn.Embedding(self.max_nodes, latent_dim)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.positional_encodings = fixed_positional_encoding(max_nodes, latent_dim, device=device)
+        # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # self.positional_encodings = fixed_positional_encoding(max_nodes, latent_dim, device=device)
         
     def forward(self, z: torch.Tensor, n_nodes: int, n_edges: int):
         batch_size = z.size(0)
         seq_input = z.unsqueeze(1).repeat(1, self.max_nodes, 1)
         positions = torch.arange(self.max_nodes, device=z.device)
         positional_embeddings = self.embeddings(positions).repeat(batch_size, 1, 1)
-        seq_input += self.positional_encodings.unsqueeze(0)
-        seq_input = torch.cat((seq_input, positional_embeddings), dim=-1)
-        seq_input = self.proj_pre_rnn(seq_input)
-        # seq_input += positional_embeddings
+        # seq_input += self.positional_encodings.unsqueeze(0)
+        # seq_input = torch.cat((seq_input, positional_embeddings), dim=-1)
+        # seq_input = self.proj_pre_rnn(seq_input)
+        seq_input += positional_embeddings
 
         mask = torch.arange(self.max_nodes, device=z.device).unsqueeze(0).expand(batch_size, self.max_nodes) < n_nodes.unsqueeze(1)
         seq_input[~mask] = 0.0
