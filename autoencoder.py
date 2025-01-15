@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch_geometric.nn import GINConv, GATConv, GlobalAttention, TopKPooling
 from torch_geometric.nn import global_add_pool, global_mean_pool
 
-from new_decoder import RNNDecoder, RNNDecoderE
+from new_decoder import RNNDecoder, AttentionDecoder
 
 
 # Decoder
@@ -156,6 +156,7 @@ class VariationalAutoEncoder(nn.Module):
         self.fc_logvar = nn.Linear(hidden_dim_enc, latent_dim)
         # self.decoder = Decoder(latent_dim*2, hidden_dim_dec, n_layers_dec, n_max_nodes)
         self.decoder = RNNDecoder(latent_dim=latent_dim*2, hidden_dim=hidden_dim_dec, n_layers=n_layers_dec, max_nodes=n_max_nodes)
+        # self.decoder = AttentionDecoder(latent_dim=latent_dim*2, hidden_dim=hidden_dim_dec, n_heads=3, max_nodes=n_max_nodes)
         self.cond_encoder = condEncoder(cond_dim=7,latent_dim=latent_dim)
         self.lambda_contrastive = lambda_contrastive
         self.beta = beta
