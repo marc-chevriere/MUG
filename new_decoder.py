@@ -28,16 +28,16 @@ class RNNDecoder(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 2)
         )
-        # self.embeddings = nn.Embedding(self.max_nodes, latent_dim)
+        self.embeddings = nn.Embedding(self.max_nodes, latent_dim)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.positional_encodings = fixed_positional_encoding(max_nodes, latent_dim, device=device)
         
     def forward(self, z: torch.Tensor, n_nodes: int):
         batch_size = z.size(0)
         seq_input = z.unsqueeze(1).repeat(1, self.max_nodes, 1)
-        # positions = torch.arange(self.max_nodes, device=seq_input.device)
-        # positional_embeddings = self.embeddings(positions)
-        # seq_input += positional_embeddings.unsqueeze(0)
+        positions = torch.arange(self.max_nodes, device=seq_input.device)
+        positional_embeddings = self.embeddings(positions)
+        seq_input += positional_embeddings.unsqueeze(0)
         seq_input += self.positional_encodings.unsqueeze(0)
 
         mask = torch.arange(self.max_nodes, device=z.device).unsqueeze(0).expand(batch_size, self.max_nodes) < n_nodes.unsqueeze(1)
