@@ -140,17 +140,17 @@ class TransformerDecoderModel(nn.Module):
         self.batch_size = batch_size
 
         decoder_layer = nn.TransformerDecoderLayer(
-            d_model=latent_dim, 
-            nhead=2, 
-            dim_feedforward=hidden_dim // 2  
+            d_model=2*latent_dim, 
+            nhead=4, 
+            dim_feedforward=hidden_dim
         )
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
-        self.proj_pre_rnn = nn.Linear(2 * latent_dim, latent_dim)
         self.adj_mlp = nn.Sequential(
-            nn.Linear(hidden_dim//2, hidden_dim // 2),
+            nn.Linear(latent_dim * 4, hidden_dim),  
             nn.ReLU(),
-            nn.Linear(hidden_dim // 2, 2)
+            nn.Linear(hidden_dim, 2)
         )
+
         self.embeddings = nn.Embedding(self.max_nodes, latent_dim)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.positional_encodings = fixed_positional_encoding(max_nodes, latent_dim, device=device)
@@ -163,18 +163,15 @@ class TransformerDecoderModel(nn.Module):
         positional_embeddings = self.embeddings(positions).repeat(batch_size, 1, 1)
         seq_input += self.positional_encodings.unsqueeze(0)
         seq_input = torch.cat((seq_input, positional_embeddings), dim=-1)
-        seq_input = self.proj_pre_rnn(seq_input)
-
+        mask = torch.arange(self.max_nodes, device=z.device).unsqueeze(0).expand(batch_size, self.max_nodes) < n_nodes.unsqueeze(1)
+        seq_input[~mask] = 0.0
         tgt_mask = nn.Transformer.generate_square_subsequent_mask(self.max_nodes).to(z.device)
         src_padding_mask = torch.arange(self.max_nodes, device=z.device).unsqueeze(0).expand(batch_size, self.max_nodes) >= n_nodes.unsqueeze(1)
-        
         memory = seq_input  
-        tgt = seq_input.permute(1, 0, 2)  # (seq_len, batch_size, latent_dim)
+        tgt = seq_input.permute(1, 0, 2)
         transformer_out = self.transformer_decoder(tgt, memory.permute(1, 0, 2), tgt_mask=tgt_mask, memory_key_padding_mask=src_padding_mask)
-        node_emb = transformer_out.permute(1, 0, 2)  # Back to (batch_size, seq_len, latent_dim)
-        
-        # Node embeddings
-        # node_emb = self.node_proj(transformer_out)
+        node_emb = transformer_out.permute(1, 0, 2)  
+        node_emb = node_emb * mask.unsqueeze(-1).float()
         idx = torch.triu_indices(self.max_nodes, self.max_nodes, offset=1, device=z.device)
         emb_i = node_emb[:, idx[0], :]
         emb_j = node_emb[:, idx[1], :]
