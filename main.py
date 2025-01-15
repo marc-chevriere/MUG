@@ -346,38 +346,38 @@ mae_all = z_score_mae(target, pred, mean, std)
 
 
 print(80*"-")
-print(f"SCORE: {str(mae_all)}")
+print(f"FINAL SCORE: {str(mae_all)}")
 print(80*"-")
 
-# # Save to a CSV file
-# with open("output.csv", "w", newline="") as csvfile:
-#     writer = csv.writer(csvfile)
-#     # Write the header
-#     writer.writerow(["graph_id", "edge_list"])
-#     for k, data in enumerate(tqdm(test_loader, desc='Processing test set',)):
-#         data = data.to(device)
+# Save to a CSV file
+with open("output.csv", "w", newline="") as csvfile:
+    writer = csv.writer(csvfile)
+    # Write the header
+    writer.writerow(["graph_id", "edge_list"])
+    for k, data in enumerate(tqdm(test_loader, desc='Processing test set',)):
+        data = data.to(device)
         
-#         stat = data.stats
-#         bs = stat.size(0)
+        stat = data.stats
+        bs = stat.size(0)
 
-#         graph_ids = data.filename
+        graph_ids = data.filename
 
-#         samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas, batch_size=bs)
-#         x_sample = samples[-1]
-#         adj = autoencoder.decode_mu(x_sample, stat)
-#         stat_d = torch.reshape(stat, (-1, args.n_condition))
+        samples = sample(denoise_model, data.stats, latent_dim=args.latent_dim, timesteps=args.timesteps, betas=betas, batch_size=bs)
+        x_sample = samples[-1]
+        adj = autoencoder.decode_mu(x_sample, stat)
+        stat_d = torch.reshape(stat, (-1, args.n_condition))
 
 
-#         for i in range(stat.size(0)):
-#             stat_x = stat_d[i]
+        for i in range(stat.size(0)):
+            stat_x = stat_d[i]
 
-#             Gs_generated = construct_nx_from_adj(adj[i,:,:].detach().cpu().numpy())
-#             stat_x = stat_x.detach().cpu().numpy()
+            Gs_generated = construct_nx_from_adj(adj[i,:,:].detach().cpu().numpy())
+            stat_x = stat_x.detach().cpu().numpy()
 
-#             # Define a graph ID
-#             graph_id = graph_ids[i]
+            # Define a graph ID
+            graph_id = graph_ids[i]
 
-#             # Convert the edge list to a single string
-#             edge_list_text = ", ".join([f"({u}, {v})" for u, v in Gs_generated.edges()])           
-#             # Write the graph ID and the full edge list as a single row
-#             writer.writerow([graph_id, edge_list_text])
+            # Convert the edge list to a single string
+            edge_list_text = ", ".join([f"({u}, {v})" for u, v in Gs_generated.edges()])           
+            # Write the graph ID and the full edge list as a single row
+            writer.writerow([graph_id, edge_list_text])
