@@ -78,7 +78,7 @@ class RNNDecoderwAtt(nn.Module):
         self.batch_size = batch_size
         
         self.rnn = nn.GRU(
-            input_size = latent_dim*2, 
+            input_size = latent_dim, 
             hidden_size = hidden_dim,
             num_layers = n_layers, 
             batch_first = True
@@ -90,10 +90,10 @@ class RNNDecoderwAtt(nn.Module):
         self.embeddings = nn.Embedding(self.max_nodes, latent_dim)
         self.transformer = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d_model=2*latent_dim, nhead=2),
-            num_layers=2
+            num_layers=1
         )
-        # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        # self.positional_encodings = fixed_positional_encoding(max_nodes, latent_dim, device=device)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.positional_encodings = fixed_positional_encoding(max_nodes, latent_dim, device=device)
         
     def forward(self, z: torch.Tensor, n_nodes: int, n_edges: int):
         batch_size = z.size(0)
@@ -101,9 +101,9 @@ class RNNDecoderwAtt(nn.Module):
         positions = torch.arange(self.max_nodes, device=z.device)
         positional_embeddings = self.embeddings(positions).repeat(batch_size, 1, 1)
 
-        seq_input = torch.cat((seq_input, positional_embeddings), dim=-1)
-        # seq_input += positional_embeddings
-        # seq_input += self.positional_encodings.unsqueeze(0)
+        # seq_input = torch.cat((seq_input, positional_embeddings), dim=-1)
+        seq_input += positional_embeddings
+        seq_input += self.positional_encodings.unsqueeze(0)
 
         mask = torch.arange(self.max_nodes, device=z.device).unsqueeze(0).expand(batch_size, self.max_nodes) < n_nodes.unsqueeze(1)
         seq_input[~mask] = 0.0
