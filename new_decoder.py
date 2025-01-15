@@ -129,7 +129,7 @@ class RNNDecoderwAtt(nn.Module):
 
 
 class TransformerDecoderModel(nn.Module):
-    def __init__(self, latent_dim: int, hidden_dim: int, n_layers: int, max_nodes: int = 50, tau: float = 1.0, hard: bool = True, batch_size: int = 256):
+    def __init__(self, latent_dim: int = 64, hidden_dim: int = 128, n_layers: int = 2, max_nodes: int = 50, tau: float = 1.0, hard: bool = True, batch_size: int = 256):
         super(TransformerDecoderModel, self).__init__()
         self.latent_dim = latent_dim
         self.hidden_dim = hidden_dim
@@ -140,20 +140,21 @@ class TransformerDecoderModel(nn.Module):
         self.batch_size = batch_size
 
         decoder_layer = nn.TransformerDecoderLayer(
-            d_model=2*latent_dim, 
-            nhead=4, 
-            dim_feedforward=hidden_dim
+            d_model=latent_dim,  # Reduced from 2 * latent_dim to latent_dim
+            nhead=2,  # Reduced number of attention heads
+            dim_feedforward=hidden_dim // 2  # Reduced feedforward dimension
         )
         self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
         self.adj_mlp = nn.Sequential(
-            nn.Linear(latent_dim * 4, hidden_dim),  
+            nn.Linear(latent_dim * 2, hidden_dim // 2),  # Reduced input and output dimensions
             nn.ReLU(),
-            nn.Linear(hidden_dim, 2)
+            nn.Linear(hidden_dim // 2, 2)  # Kept output dimension constant
         )
 
         self.embeddings = nn.Embedding(self.max_nodes, latent_dim)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.positional_encodings = fixed_positional_encoding(max_nodes, latent_dim, device=device)
+
 
 
     def forward(self, z: torch.Tensor, n_nodes: int, n_edges: int):
