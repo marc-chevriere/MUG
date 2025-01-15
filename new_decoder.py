@@ -4,6 +4,27 @@ import torch.nn.functional as F
 
 from utils import fixed_positional_encoding
 
+class PairwiseAttention(nn.Module):
+    def __init__(self, hidden_dim, num_heads):
+        super().__init__()
+        self.attention = nn.MultiheadAttention(embed_dim=hidden_dim, num_heads=num_heads, batch_first=True)
+
+    def forward(self, emb_i, emb_j):
+        query = emb_i.unsqueeze(1)
+        key_value = torch.stack([emb_i, emb_j], dim=1)
+        attn_output, _ = self.attention(query, key_value, key_value)
+        return attn_output.squeeze(1)
+    
+    
+class ResidualGRU(nn.Module):
+    def __init__(self, input_size, hidden_size, n_layers):
+        super().__init__()
+        self.gru = nn.GRU(input_size, hidden_size, num_layers=n_layers, batch_first=True)
+
+    def forward(self, x):
+        out, _ = self.gru(x)
+        return out + x
+
 
 class RNNDecoder(nn.Module):
     def __init__(self, latent_dim: int, hidden_dim: int, n_layers: int, max_nodes: int = 50, tau: float = 1.0, hard: bool = True,  batch_size: int=256):
@@ -29,6 +50,7 @@ class RNNDecoder(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 2)
         )
+        self.pairwise_attention = PairwiseAttention(hidden_dim=self.hidden_dim, num_heads=4)
         self.embeddings = nn.Embedding(self.max_nodes, latent_dim)
         # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # self.positional_encodings = fixed_positional_encoding(max_nodes, latent_dim, device=device)
@@ -50,7 +72,8 @@ class RNNDecoder(nn.Module):
         idx = torch.triu_indices(self.max_nodes, self.max_nodes, offset=1, device=z.device)
         emb_i = node_emb[:, idx[0], :]
         emb_j = node_emb[:, idx[1], :]
-        pair_emb = torch.cat([emb_i, emb_j], dim=-1)
+        # pair_emb = torch.cat([emb_i, emb_j], dim=-1)
+        pair_emb = self.pairwise_attention(emb_i, emb_j)
         logits = self.adj_mlp(pair_emb)
         adjacency_values = F.gumbel_softmax(logits, tau=self.tau, hard=self.hard, dim=-1)[..., 0]
         adj = torch.zeros(batch_size, self.max_nodes, self.max_nodes, device=z.device)
@@ -190,14 +213,24 @@ class RNNDecoder(nn.Module):
 #         adj = adj * mask2d.float()
 #         return adj
 
+        # adj = torch.zeros(batch_size, self.max_nodes, self.max_nodes, 2, device=z.device)
+        # adj[:, idx[0], idx[1]] = logits
+        # indices = torch.arange(self.max_nodes, device=z.device).unsqueeze(0) 
+        # mask = indices < n_nodes.unsqueeze(1)
+        # mask2d = mask.unsqueeze(2) & mask.unsqueeze(1)
+        # adj = adj * mask2d.float().unsqueeze(-1)
+        # adj = F.gumbel_softmax(adj, tau=self.tau, hard=self.hard, dim=-1)[..., 0]
+        # adj = adj + torch.transpose(adj, 1, 2)
+        # breakpoint()
+
 
 class AttentionDecoder(nn.Module):
     def __init__(self, latent_dim, hidden_dim, max_nodes, tau: float = 1.0, hard: bool = True):
         super(AttentionDecoder, self).__init__()
         self.max_nodes = max_nodes
         self.embeddings = nn.Embedding(self.max_nodes, latent_dim)
-        self.transformer = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=latent_dim*2, nhead=4),
+        self.transformer = nn.TransformerDecoder(
+            nn.TransformerDecoderLayer(d_model=latent_dim*2, nhead=4),
             num_layers=2
         )
         self.adj_mlp = nn.Sequential(
